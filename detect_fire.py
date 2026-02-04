@@ -37,16 +37,16 @@ def load_master_file(filepath):
     cal_ds = f.select('CalibratedData')
     scale_factors = cal_ds.attributes()['scale_factor']
 
-    raw_t4 = cal_ds[:, CH_T4, :].astype(np.float32) * scale_factors[CH_T4]
-    raw_t11 = cal_ds[:, CH_T11, :].astype(np.float32) * scale_factors[CH_T11]
+    raw_t4 = cal_ds[:, CH_T4, :].astype(np.float32) * scale_factors[CH_T4]   # [W/m²/sr/μm]
+    raw_t11 = cal_ds[:, CH_T11, :].astype(np.float32) * scale_factors[CH_T11] # [W/m²/sr/μm]
     cal_ds.endaccess()
 
-    lat = f.select('PixelLatitude')[:]
-    lon = f.select('PixelLongitude')[:]
-    solar_zenith = f.select('SolarZenithAngle')[:]
-    eff_wl = f.select('EffectiveCentralWavelength_IR_bands')[:]
-    temp_slope = f.select('TemperatureCorrectionSlope')[:]
-    temp_intercept = f.select('TemperatureCorrectionIntercept')[:]
+    lat = f.select('PixelLatitude')[:]              # [degrees]
+    lon = f.select('PixelLongitude')[:]             # [degrees]
+    solar_zenith = f.select('SolarZenithAngle')[:]  # [degrees] 0°=overhead, 90°=horizon
+    eff_wl = f.select('EffectiveCentralWavelength_IR_bands')[:]      # [μm]
+    temp_slope = f.select('TemperatureCorrectionSlope')[:]           # [unitless]
+    temp_intercept = f.select('TemperatureCorrectionIntercept')[:]   # [K]
 
     f.end()
 
@@ -59,14 +59,14 @@ def load_master_file(filepath):
     solar_zenith[solar_zenith == fill] = np.nan
 
     return {
-        'radiance_t4': raw_t4,
-        'radiance_t11': raw_t11,
-        'lat': lat,
-        'lon': lon,
-        'solar_zenith': solar_zenith,
-        'eff_wavelengths': eff_wl,
-        'temp_corr_slope': temp_slope,
-        'temp_corr_intercept': temp_intercept,
+        'radiance_t4': raw_t4,          # [W/m²/sr/μm]
+        'radiance_t11': raw_t11,        # [W/m²/sr/μm]
+        'lat': lat,                     # [degrees]
+        'lon': lon,                     # [degrees]
+        'solar_zenith': solar_zenith,   # [degrees]
+        'eff_wavelengths': eff_wl,      # [μm]
+        'temp_corr_slope': temp_slope,       # [unitless]
+        'temp_corr_intercept': temp_intercept, # [K]
         'filename': os.path.basename(filepath),
     }
 
@@ -117,7 +117,12 @@ def compute_fire_channels(data):
 # ── Fire Detection ─────────────────────────────────────────
 
 def is_daytime(solar_zenith, threshold=85.0):
-    """Return boolean mask: True where pixel is daytime (SZA < threshold)."""
+    """Return boolean mask: True where pixel is daytime (SZA < threshold).
+
+    Args:
+        solar_zenith: Solar zenith angle [degrees]. 0° = sun overhead, 90° = horizon.
+        threshold: Day/night boundary [degrees]. MODIS MOD14 uses 85°.
+    """
     return solar_zenith < threshold
 
 
@@ -182,12 +187,25 @@ def detect_fire(T4, T11, daytime,
                 context_sigma=3.0):
     """Run fire detection on a MASTER scene.
 
+    Args:
+        T4: Brightness temperature at ~3.9 μm [K].
+        T11: Brightness temperature at ~11.25 μm [K].
+        daytime: Boolean mask, True = daytime pixel.
+        T4_day_thresh: Daytime absolute T4 threshold [K]. Higher (325 K / 52°C)
+                       because solar heating naturally warms surfaces to 310-320 K.
+        T4_night_thresh: Nighttime absolute T4 threshold [K]. Lower (310 K / 37°C)
+                         because background cools to 260-290 K without sun.
+        delta_T_thresh: Minimum T4-T11 difference [K]. Separates fire (large dT)
+                        from warm ground (small dT).
+        context_window: Sliding window size [pixels]. 61 px ≈ 3 km at MASTER resolution.
+        context_sigma: Number of std deviations above local mean for anomaly [unitless].
+
     Returns dict with detection masks and intermediate arrays.
     """
-    delta_T = T4 - T11
+    delta_T = T4 - T11  # [K]
 
     # --- Absolute threshold test ---
-    threshold = np.where(daytime, T4_day_thresh, T4_night_thresh)
+    threshold = np.where(daytime, T4_day_thresh, T4_night_thresh)  # [K]
     absolute_mask = (T4 > threshold) & (delta_T > delta_T_thresh)
 
     # --- Contextual anomaly test ---
@@ -285,7 +303,8 @@ def plot_detection(data, result, filepath, suffix=''):
         ax.set_ylabel('Scanline')
 
     plt.tight_layout()
-    outname = f'fire_detection_{suffix}.png'
+    outname = f'plots/fire_detection_{suffix}.png'
+    os.makedirs('plots', exist_ok=True)
     plt.savefig(outname, dpi=150)
     print(f'Saved {outname}')
     plt.close()
@@ -314,8 +333,9 @@ def plot_map(data, result, filepath):
     ax.set_title(f'Fire Map: {name}')
     ax.set_aspect('equal')
     plt.tight_layout()
-    plt.savefig('fire_map_burn.png', dpi=150)
-    print('Saved fire_map_burn.png')
+    os.makedirs('plots', exist_ok=True)
+    plt.savefig('plots/fire_map_burn.png', dpi=150)
+    print('Saved plots/fire_map_burn.png')
     plt.close()
 
 
@@ -340,8 +360,9 @@ def plot_comparison(data_pre, result_pre, data_burn, result_burn):
         ax.set_ylabel('Scanline')
 
     plt.tight_layout()
-    plt.savefig('fire_comparison.png', dpi=150)
-    print('Saved fire_comparison.png')
+    os.makedirs('plots', exist_ok=True)
+    plt.savefig('plots/fire_comparison.png', dpi=150)
+    print('Saved plots/fire_comparison.png')
     plt.close()
 
 

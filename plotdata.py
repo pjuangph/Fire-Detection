@@ -58,7 +58,9 @@ for ax, ch, label in zip(axes.flat, channels, labels):
     plt.colorbar(im, ax=ax, label="W/m²/sr/μm", fraction=0.046)
 
 plt.tight_layout()
-plt.savefig("radiance_overview.png", dpi=150)
+import os
+os.makedirs("plots", exist_ok=True)
+plt.savefig("plots/radiance_overview.png", dpi=150)
 plt.show()
 
 # Geographic extent plot
@@ -74,5 +76,5 @@ ax2.set_title(f"Ch {thermal_ch+1} ({wavelengths[thermal_ch]:.2f} μm) - Georefer
 ax2.set_aspect('equal')
 plt.colorbar(sc, ax=ax2, label="W/m²/sr/μm")
 plt.tight_layout()
-plt.savefig("georeferenced_thermal.png", dpi=150)
+plt.savefig("plots/georeferenced_thermal.png", dpi=150)
 plt.show()

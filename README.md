@@ -78,7 +78,7 @@ The result is a 2D image where:
 
 Before and after each scan, the mirror views two internal **blackbody references** — one cold (~10°C) and one warm (~39°C) — whose temperatures are precisely known. By comparing the signal from these references to the signal from the ground, the instrument converts raw detector counts into calibrated **radiance** (the actual amount of energy reaching the sensor). This is what is stored in the Level 1B (L1B) data.
 
-![Blackbody Temperatures](blackbody_temperatures.png)
+![Blackbody Temperatures](plots/blackbody_temperatures.png)
 *The two onboard blackbody references maintain stable temperatures throughout the flight, providing the calibration anchors for converting raw counts to physical radiance units.*
 
 ---
@@ -286,7 +286,7 @@ T11 range: 276.7 - 358.1 K
 Fire pixels: 455 (0.017% of image) — false positives from edge artifacts
 ```
 
-![Pre-burn fire detection](fire_detection_preburn.png)
+![Pre-burn fire detection](plots/fire_detection_preburn.png)
 
 **What you see:**
 - **Top left (T4, 3.9 μm):** Warm and cool terrain visible. Bright streaks are exposed rock or bare soil reflecting sunlight. The temperature range is typical for unburned Arizona plateau in October.
@@ -306,7 +306,7 @@ T11 range: 114.9 - 416.8 K
 Fire pixels: 8,650 (0.468% of image)
 ```
 
-![Burn fire detection](fire_detection_burn.png)
+![Burn fire detection](plots/fire_detection_burn.png)
 
 **What you see:**
 - **Top left (T4, 3.9 μm):** Bright white/yellow features appear that were not present in the pre-burn image. These are fire pixels reaching up to 800 K (527°C) — the sensor may even be saturating on the hottest pixels.
@@ -316,19 +316,19 @@ Fire pixels: 8,650 (0.468% of image)
 
 ### Georeferenced Fire Map
 
-![Fire map on geographic coordinates](fire_map_burn.png)
+![Fire map on geographic coordinates](plots/fire_map_burn.png)
 
 The fire pixels plotted on their actual geographic coordinates (latitude/longitude) on the Kaibab Plateau. The fire perimeter follows the terrain — you can see it tracing along ridgelines and valleys where the prescribed burn was conducted.
 
 ### Side-by-Side Comparison
 
-![Pre-burn vs burn comparison](fire_comparison.png)
+![Pre-burn vs burn comparison](plots/fire_comparison.png)
 
 The comparison makes it clear: the pre-burn scene (left) shows no coherent fire pattern, while the burn scene (right) shows a dense cluster of fire detections.
 
 ### Multi-Channel Overview
 
-![Radiance across all spectral regions](radiance_overview.png)
+![Radiance across all spectral regions](plots/radiance_overview.png)
 
 This shows the same scene across 6 different channels spanning the full spectrum (VNIR through TIR), demonstrating how different wavelengths reveal different surface features.
 
@@ -349,24 +349,48 @@ conda install -c conda-forge pyhdf
 
 ### Scripts
 
-| Script | Purpose |
-|--------|---------|
-| `plotdata.py` | Explore the HDF files — plots radiance across channels and a georeferenced thermal image |
-| `detect_fire.py` | Run fire detection — compares a pre-burn file to a burn file, produces detection maps |
+| Script | Purpose | Documentation |
+|--------|---------|---------------|
+| `plotdata.py` | Explore the HDF files — plots radiance across channels and a georeferenced thermal image | — |
+| `detect_fire.py` | Run fire detection — compares a pre-burn file to a burn file, produces detection maps | — |
+| `mosaic_flight.py` | Assemble all flight lines into a single georeferenced mosaic per flight | [mosaic_flight.md](mosaic_flight.md) |
+| `plot_burn_locations.py` | Per-flight 2x2 analysis: burn locations, T4, T11, and detection space scatter | — |
 
 ```bash
 python detect_fire.py
 ```
 
-This produces:
+This produces (in `plots/`):
 - `fire_detection_preburn.png` — 4-panel analysis of pre-burn scene
 - `fire_detection_burn.png` — 4-panel analysis of burn scene
 - `fire_map_burn.png` — georeferenced fire pixel map
 - `fire_comparison.png` — side-by-side comparison
 
+```bash
+python mosaic_flight.py
+```
+
+This produces one mosaic per flight in `plots/` (see [mosaic_flight.md](mosaic_flight.md) for details):
+- `mosaic_flight_2480103.png` — Pre-burn, 9 lines composited
+- `mosaic_flight_2480104.png` — First fire flight, 40 lines composited
+- `mosaic_flight_2480105.png` — Night fire flight, 16 lines composited
+- `mosaic_flight_2480106.png` — Third fire flight, 14 lines composited
+
+```bash
+python plot_burn_locations.py
+```
+
+This produces one PNG per flight in `plots/`, each with a 2x2 layout (burn locations, T4, T11, detection space scatter):
+- `burn_locations_2480103.png` — Pre-burn false positive analysis
+- `burn_locations_2480104.png` — First fire flight (Blowdown)
+- `burn_locations_2480105.png` — Night fire flight (Lakes Unit)
+- `burn_locations_2480106.png` — Third fire flight (Blowdown)
+
 ### Data
 
-The HDF4 files should be placed in `ignite_fire_data/`. They are MASTER Level 1B files available from [NASA ASAP Data](https://asapdata.arc.nasa.gov/sensors/master/).
+The HDF4 files should be placed in `ignite_fire_data/`. They are MASTER Level 1B files from the FireSense 2023 campaign, publicly available from the [NASA ASAP Data Archive](https://asapdata.arc.nasa.gov/sensors/master/). The specific dataset used is the **MASTER Level 1B** product from flights 24-801-03 through 24-801-06 (October 18-20, 2023, Kaibab National Forest, Arizona).
+
+All plots are saved to the `plots/` directory.
 
 ---
 
