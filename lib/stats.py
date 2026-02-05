@@ -1,6 +1,10 @@
 """Analysis utilities: pixel tables, location statistics, area computation."""
 
+from __future__ import annotations
+
 import os
+from typing import Any
+
 import numpy as np
 
 from lib.constants import GRID_RES
@@ -8,8 +12,10 @@ from lib.io import process_file
 from lib.fire import detect_fire_simple
 
 
-def build_pixel_table(files, lat_min, lat_max, lon_min, lon_max,
-                      day_night='D', flight_num=''):
+def build_pixel_table(files: list[str], lat_min: float, lat_max: float,
+                      lon_min: float, lon_max: float,
+                      day_night: str = 'D',
+                      flight_num: str = '') -> Any:
     """Build a per-pixel DataFrame from all files in a flight.
 
     Each valid pixel from each file is one row. Grid cells observed
@@ -72,7 +78,7 @@ def build_pixel_table(files, lat_min, lat_max, lon_min, lon_max,
     return pd.concat(rows_list, ignore_index=True)
 
 
-def compute_location_stats(pixel_df):
+def compute_location_stats(pixel_df: Any) -> Any:
     """Compute per-location statistics from a pixel table.
 
     Groups by (lat, lon) and computes mean, std, count, and fire
@@ -105,14 +111,14 @@ def compute_location_stats(pixel_df):
     return agg
 
 
-def compute_cell_area_m2(lat_center_deg):
+def compute_cell_area_m2(lat_center_deg: float) -> float:
     """Area of one grid cell in m² at the given latitude."""
     dy = GRID_RES * 111_000
     dx = GRID_RES * 111_000 * np.cos(np.radians(lat_center_deg))
     return dx * dy
 
 
-def format_area(area_m2):
+def format_area(area_m2: float) -> str:
     """Format area as m² or hectares."""
     if area_m2 >= 10_000:
         return f'{area_m2 / 10_000:.1f} ha'

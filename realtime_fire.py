@@ -20,13 +20,17 @@ Usage:
     python realtime_fire.py           # all flights
 """
 
+from __future__ import annotations
+
 import os
+from typing import Any
+
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from lib import (
-    group_files_by_flight, compute_grid_extent,
+    group_files_by_flight,
     compute_ndvi, init_grid_state, process_sweep, get_fire_mask,
     detect_fire_zones, compute_cell_area_m2, format_area,
 )
@@ -35,8 +39,10 @@ from lib import (
 # ── Rendering ─────────────────────────────────────────────────
 
 
-def render_frame(gs, fire_mask, frame_num, n_total,
-                 flight_num, comment, outdir, cell_area_m2):
+def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
+                 frame_num: int, n_total: int,
+                 flight_num: str, comment: str,
+                 outdir: str, cell_area_m2: float) -> str:
     """Render one frame of the real-time simulation as a PNG.
 
     Background layer is chosen by checking if the grid has accumulated
@@ -49,7 +55,7 @@ def render_frame(gs, fire_mask, frame_num, n_total,
     has_vnir = np.any(np.isfinite(gs['NIR']))
     lat_axis = gs['lat_axis']
     lon_axis = gs['lon_axis']
-    extent = [lon_axis[0], lon_axis[-1], lat_axis[-1], lat_axis[0]]
+    extent = (lon_axis[0], lon_axis[-1], lat_axis[-1], lat_axis[0])
 
     fig, ax = plt.subplots(figsize=(16, 14))
 
@@ -143,7 +149,8 @@ def render_frame(gs, fire_mask, frame_num, n_total,
 # ── Simulation ────────────────────────────────────────────────
 
 
-def simulate_flight(flight_num, files, comment):
+def simulate_flight(flight_num: str, files: list[str],
+                    comment: str) -> None:
     """Simulate real-time fire detection for one flight.
 
     Day/night is auto-detected per sweep from VNIR radiance.
@@ -159,13 +166,7 @@ def simulate_flight(flight_num, files, comment):
     print(f'{len(files)} sweeps (day/night auto-detected per sweep)')
     print('=' * 60)
 
-    # Compute grid extent for the full flight
-    lat_min, lat_max, lon_min, lon_max = compute_grid_extent(files)
-    gs = init_grid_state(lat_min, lat_max, lon_min, lon_max)
-
-    lat_center = (lat_min + lat_max) / 2
-    cell_area = compute_cell_area_m2(lat_center)
-    print(f'Grid: {gs["nrows"]} x {gs["ncols"]}, cell area: {cell_area:.0f} m\u00b2')
+    gs = init_grid_state()  # empty, grows dynamically per sweep
 
     outdir = f'plots/realtime_{flight_num.replace("-", "")}'
     os.makedirs(outdir, exist_ok=True)
@@ -173,11 +174,20 @@ def simulate_flight(flight_num, files, comment):
     print(f'\nSimulating {len(files)} sweeps \u2192 {outdir}/\n')
 
     pixel_rows = []
+    cell_area = 0.0
 
     for i, filepath in enumerate(files):
         name = os.path.basename(filepath)
         n_new_fire, detected_dn = process_sweep(
             filepath, gs, pixel_rows, day_night='auto', flight_num=flight_num)
+
+        # Recompute cell area from current grid center (updates after expansion)
+        lat_center = (gs['lat_min'] + gs['lat_max']) / 2
+        cell_area = compute_cell_area_m2(lat_center)
+
+        if i == 0:
+            print(f'Initial grid: {gs["nrows"]} x {gs["ncols"]}, '
+                  f'cell area: {cell_area:.0f} m\u00b2')
 
         fire_mask = get_fire_mask(gs)
         fire_total = int(np.sum(fire_mask))
@@ -212,7 +222,7 @@ def simulate_flight(flight_num, files, comment):
           f'{outdir}/frame_*.png {outdir}/animation.gif')
 
 
-def main():
+def main() -> None:
     flights = group_files_by_flight()
 
     print(f'Scanned {len(flights)} flights:')

@@ -1,9 +1,11 @@
 """Vegetation index computation."""
 
+from __future__ import annotations
+
 import numpy as np
 
 
-def compute_ndvi(red, nir):
+def compute_ndvi(red: np.ndarray, nir: np.ndarray) -> np.ndarray:
     """Compute Normalized Difference Vegetation Index from radiance.
 
     NDVI = (NIR - Red) / (NIR + Red)
@@ -25,7 +27,7 @@ def compute_ndvi(red, nir):
     return ndvi
 
 
-def has_sunlight(red, nir, threshold=5.0):
+def has_sunlight(red: np.ndarray, nir: np.ndarray, threshold: float = 5.0) -> bool:
     """Check if VNIR bands have meaningful solar signal.
 
     At night or under heavy cloud, reflected-solar bands (Red, NIR) read
