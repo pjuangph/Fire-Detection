@@ -61,9 +61,9 @@ MASTER sits in the belly of a NASA B200 aircraft and points straight down. A spi
 
 ```
      Aircraft flying direction →
-     ═══════════╦═══════════
-                ║ MASTER sensor
-                ║
+     ══════════╦═══════════
+               ║ MASTER sensor
+               ║
          ╱─────╨─────╲       Scanning mirror sweeps
         ╱      │       ╲     left to right
        ╱       │        ╲
