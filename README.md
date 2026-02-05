@@ -582,7 +582,7 @@ This shows the same scene across 6 different channels spanning the full spectrum
 ### Requirements
 
 ```
-pip install pyhdf numpy matplotlib torch scikit-learn
+pip install -r requirements.txt
 ```
 
 Note: `pyhdf` may require HDF4 libraries. On macOS with conda/mamba:
@@ -590,14 +590,31 @@ Note: `pyhdf` may require HDF4 libraries. On macOS with conda/mamba:
 conda install -c conda-forge pyhdf
 ```
 
+### Downloading the Data
+
+The MASTER L1B data is publicly available from the [ORNL DAAC](https://daac.ornl.gov/cgi-bin/dsviewer.pl?ds_id=2330) (DOI: [10.3334/ORNLDAAC/2330](https://doi.org/10.3334/ORNLDAAC/2330)). A download script is included that handles authentication and fetches the correct flights automatically:
+
+```bash
+# First: create a free account at https://urs.earthdata.nasa.gov/
+
+python download_data.py                # download all 4 flights (~83 files, ~9 GB)
+python download_data.py --flight 04    # download only flight 24-801-04
+python download_data.py --list         # list available files without downloading
+```
+
+The script will prompt for your NASA Earthdata credentials on first run and cache them in `~/.netrc` for future use. Files are saved to `ignite_fire_data/`.
+
 ### Scripts
 
 | Script | Purpose |
 |--------|---------|
+| `download_data.py` | Download MASTER L1B data from NASA Earthdata |
 | `plotdata.py` | Explore the HDF files — plots radiance across channels and a georeferenced thermal image |
 | `detect_fire.py` | Run fire detection — compares a pre-burn file to a burn file, produces detection maps |
 | `mosaic_flight.py` | Assemble all flight lines into a single georeferenced mosaic per flight with multi-pass consistency filter |
 | `plot_burn_locations.py` | Per-flight 2x2 analysis: burn locations, T4, SWIR, and detection space scatter |
+| `plot_vegetation.py` | 2x2 NDVI vegetation maps with fire overlay (daytime flights) |
+| `realtime_fire.py` | Real-time sweep-by-sweep fire detection simulation with fire zone labels |
 | `fire_ml.py` | Train ML fire detector with Dice Loss using T4, T11, ΔT, SWIR features |
 
 ```bash
@@ -642,7 +659,11 @@ This trains the ML model and produces:
 
 ### Data
 
-The HDF4 files should be placed in `ignite_fire_data/`. They are MASTER Level 1B files from the FireSense 2023 campaign, publicly available from the [NASA ASAP Data Archive](https://asapdata.arc.nasa.gov/sensors/master/). The specific dataset used is the **MASTER Level 1B** product from flights 24-801-03 through 24-801-06 (October 18-20, 2023, Kaibab National Forest, Arizona).
+The data is from the **MASTER: FireSense, western US, October 2023** dataset:
+- **ORNL DAAC**: [doi.org/10.3334/ORNLDAAC/2330](https://doi.org/10.3334/ORNLDAAC/2330) (citable, requires free [Earthdata login](https://urs.earthdata.nasa.gov/))
+- **NASA ASAP Archive**: [firesense_2023](https://asapdata.arc.nasa.gov/sensors/master/data/deploy_html/firesense_2023.html)
+
+The easiest way to get the data is `python download_data.py` (see above). Or place MASTER L1B HDF4 files manually in `ignite_fire_data/`. The specific flights used are 24-801-03 through 24-801-06 (October 18-20, 2023, Kaibab National Forest, Arizona).
 
 All plots are saved to the `plots/` directory.
 

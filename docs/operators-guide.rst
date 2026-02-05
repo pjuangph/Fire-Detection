@@ -10,14 +10,22 @@ Quick Start
 
 1. **Install dependencies**::
 
-      pip install pyhdf numpy matplotlib torch scikit-learn pandas scipy
+      pip install pyhdf numpy matplotlib torch scikit-learn pandas scipy earthaccess
 
    ``pyhdf`` requires HDF4 C libraries. On macOS with conda::
 
       conda install -c conda-forge pyhdf
 
-2. **Place data files** in ``ignite_fire_data/``. Files must be MASTER
-   Level 1B HDF4 files (``MASTERL1B_*.hdf``).
+2. **Download the data** (requires a free
+   `NASA Earthdata account <https://urs.earthdata.nasa.gov/>`_)::
+
+      python download_data.py                # all 4 flights (~9 GB)
+      python download_data.py --flight 04    # just one flight (~4 GB)
+      python download_data.py --list         # list files without downloading
+
+   The script will prompt for your Earthdata credentials on first run
+   and cache them for future use. Alternatively, place MASTER L1B HDF4
+   files manually in ``ignite_fire_data/``.
 
 3. **Run a script**::
 
@@ -80,6 +88,9 @@ What Each Script Produces
    * - Script
      - Purpose
      - Output Files
+   * - ``download_data.py``
+     - Download MASTER L1B data from NASA Earthdata
+     - ``ignite_fire_data/*.hdf``
    * - ``mosaic_flight.py``
      - Assemble flight lines into georeferenced mosaic with fire overlay
      - ``plots/mosaic_flight_*.png``

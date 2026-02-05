@@ -5,3 +5,4 @@ torch
 scikit-learn
 pandas
 scipy
+earthaccess
