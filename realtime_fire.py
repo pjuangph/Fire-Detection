@@ -34,6 +34,7 @@ from lib import (
     group_files_by_flight,
     compute_ndvi, init_grid_state, process_sweep, get_fire_mask,
     detect_fire_zones, compute_cell_area_m2, format_area,
+    load_fire_model,
 )
 
 
@@ -175,7 +176,8 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
 
 
 def simulate_flight(flight_num: str, files: list[str],
-                    comment: str, gs: Dict[str,Any]) -> None:
+                    comment: str, gs: Dict[str, Any],
+                    ml_model: Any = None) -> None:
     """Simulate real-time fire detection for one flight.
 
     Day/night is auto-detected per sweep from VNIR radiance.
@@ -184,7 +186,10 @@ def simulate_flight(flight_num: str, files: list[str],
         flight_num: flight identifier (e.g. '24-801-04').
         files: list of HDF file paths for this flight.
         comment: flight comment from HDF metadata.
-        gs (Dict[str,Any]): Dictionary of data that is updated by process_sweep
+        gs: Dictionary of data that is updated by process_sweep.
+        ml_model: optional MLFireDetector. When provided, overrides the
+                  threshold-based fire mask with ML predictions from
+                  accumulated aggregate features.
     """
     print('=' * 60)
     print(f'Real-Time Fire Detection Simulation')
@@ -204,7 +209,8 @@ def simulate_flight(flight_num: str, files: list[str],
     for i, filepath in enumerate(files):
         name = os.path.basename(filepath)
         n_new_fire, detected_dn = process_sweep(
-            filepath, gs, pixel_rows, day_night='auto', flight_num=flight_num)
+            filepath, gs, pixel_rows, day_night='auto',
+            flight_num=flight_num)
 
         # Recompute cell area from current grid center (updates after expansion)
         lat_center = (gs['lat_min'] + gs['lat_max']) / 2
@@ -214,7 +220,10 @@ def simulate_flight(flight_num: str, files: list[str],
             print(f'Initial grid: {gs["nrows"]} x {gs["ncols"]}, '
                   f'cell area: {cell_area:.0f} m\u00b2')
 
-        fire_mask = get_fire_mask(gs)
+        if ml_model is not None:
+            fire_mask = ml_model.predict_from_gs(gs)
+        else:
+            fire_mask = get_fire_mask(gs)
         fire_total = int(np.sum(fire_mask))
 
         render_frame(
@@ -227,7 +236,10 @@ def simulate_flight(flight_num: str, files: list[str],
               f'new fire: {n_new_fire:,}, total: {fire_total:,}')
 
     # Final summary
-    fire_mask = get_fire_mask(gs)
+    if ml_model is not None:
+        fire_mask = ml_model.predict_from_gs(gs)
+    else:
+        fire_mask = get_fire_mask(gs)
     fire_total = int(np.sum(fire_mask))
     total_area = fire_total * cell_area
 
@@ -250,12 +262,20 @@ def main() -> None:
     flights = group_files_by_flight()
     gs = init_grid_state()  # empty, grows dynamically per sweep
 
-    print(f'Scanned {len(flights)} flights:')
+    # Load ML fire detector if available
+    ml_model = load_fire_model()
+    if ml_model is not None:
+        print('Using ML fire detector from checkpoint/fire_detector.pt')
+    else:
+        print('Using threshold fire detector (no ML model found)')
+
+    print(f'\nScanned {len(flights)} flights:')
     for fnum, info in sorted(flights.items()):
-        print(f'  {fnum}: {len(info["files"])} lines — {info["comment"]}')
+        print(f'  {fnum}: {len(info["files"])} lines \u2014 {info["comment"]}')
     print()
     for fnum, info in sorted(flights.items()):
-        simulate_flight(fnum, info['files'], info['comment'], gs)
+        simulate_flight(fnum, info['files'], info['comment'], gs,
+                        ml_model=ml_model)
 
     print('All simulations complete.')
 

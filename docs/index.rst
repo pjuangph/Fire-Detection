@@ -17,5 +17,6 @@ on the Kaibab Plateau in Arizona (October 18--20, 2023).
 
    operators-guide
    science-guide
+   ml-guide
    api/index
    scripts/index

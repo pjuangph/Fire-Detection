@@ -68,6 +68,25 @@ def _expand_grid(gs: dict[str, Any],
     new_vc[row_off:row_off + old_nrows, col_off:col_off + old_ncols] = gs['veg_confirmed']
     gs['veg_confirmed'] = new_vc
 
+    # Expand running accumulators for ML features
+    for key, fill, dtype in [
+        ('T4_max', -np.inf, np.float32),
+        ('dT_max', -np.inf, np.float32),
+        ('NDVI_min', np.inf, np.float32),
+    ]:
+        new_arr = np.full((new_nrows, new_ncols), fill, dtype=dtype)
+        new_arr[row_off:row_off + old_nrows, col_off:col_off + old_ncols] = gs[key]
+        gs[key] = new_arr
+
+    for key in ('T4_sum', 'T11_sum', 'NDVI_sum'):
+        new_arr = np.zeros((new_nrows, new_ncols), dtype=np.float64)
+        new_arr[row_off:row_off + old_nrows, col_off:col_off + old_ncols] = gs[key]
+        gs[key] = new_arr
+
+    new_nobs = np.zeros((new_nrows, new_ncols), dtype=np.int32)
+    new_nobs[row_off:row_off + old_nrows, col_off:col_off + old_ncols] = gs['NDVI_obs']
+    gs['NDVI_obs'] = new_nobs
+
     gs['nrows'] = new_nrows
     gs['ncols'] = new_ncols
     gs['lat_min'] = new_lat_min
@@ -187,6 +206,14 @@ def init_grid_state(lat_min: float | None = None, lat_max: float | None = None,
             'obs_count': np.empty((0, 0), dtype=np.int32),
             'NDVI_baseline': np.empty((0, 0), dtype=np.float32),
             'veg_confirmed': np.empty((0, 0), dtype=np.bool_),
+            # Running accumulators for ML aggregate features
+            'T4_max': np.empty((0, 0), dtype=np.float32),
+            'T4_sum': np.empty((0, 0), dtype=np.float64),
+            'T11_sum': np.empty((0, 0), dtype=np.float64),
+            'dT_max': np.empty((0, 0), dtype=np.float32),
+            'NDVI_min': np.empty((0, 0), dtype=np.float32),
+            'NDVI_sum': np.empty((0, 0), dtype=np.float64),
+            'NDVI_obs': np.empty((0, 0), dtype=np.int32),
             'nrows': 0, 'ncols': 0,
             'lat_min': None, 'lat_max': None,
             'lon_min': None, 'lon_max': None,
@@ -207,6 +234,14 @@ def init_grid_state(lat_min: float | None = None, lat_max: float | None = None,
         'obs_count': np.zeros((nrows, ncols), dtype=np.int32),
         'NDVI_baseline': np.full((nrows, ncols), np.nan, dtype=np.float32),
         'veg_confirmed': np.zeros((nrows, ncols), dtype=np.bool_),
+        # Running accumulators for ML aggregate features
+        'T4_max': np.full((nrows, ncols), -np.inf, dtype=np.float32),
+        'T4_sum': np.zeros((nrows, ncols), dtype=np.float64),
+        'T11_sum': np.zeros((nrows, ncols), dtype=np.float64),
+        'dT_max': np.full((nrows, ncols), -np.inf, dtype=np.float32),
+        'NDVI_min': np.full((nrows, ncols), np.inf, dtype=np.float32),
+        'NDVI_sum': np.zeros((nrows, ncols), dtype=np.float64),
+        'NDVI_obs': np.zeros((nrows, ncols), dtype=np.int32),
         'nrows': nrows, 'ncols': ncols,
         'lat_min': lat_min, 'lat_max': lat_max,
         'lon_min': lon_min, 'lon_max': lon_max,
@@ -218,7 +253,8 @@ def init_grid_state(lat_min: float | None = None, lat_max: float | None = None,
 def process_sweep(filepath: str, gs: dict[str, Any],
                   pixel_rows: list[dict[str, Any]],
                   day_night: str = 'auto',
-                  flight_num: str = '') -> tuple[int, str]:
+                  flight_num: str = '',
+                  fire_fn: Any = None) -> tuple[int, str]:
     """Process one sweep file and update grid state in-place.
 
     Also appends per-pixel data to pixel_rows list for DataFrame
@@ -231,6 +267,8 @@ def process_sweep(filepath: str, gs: dict[str, Any],
         day_night: 'D', 'N', or 'auto'. When 'auto', checks VNIR radiance
                    to determine if the scene has sunlight (robust to cloud).
         flight_num: flight identifier string.
+        fire_fn: optional callable(T4, T11, NDVI) -> bool mask. When
+                 provided, replaces detect_fire_simple for fire detection.
 
     Returns:
         (n_new_fire, day_night): fire pixel count and detected day/night flag.
@@ -265,8 +303,11 @@ def process_sweep(filepath: str, gs: dict[str, Any],
         day_night = 'D' if has_sunlight(pf['Red'], pf['NIR']) else 'N'
     gs['day_night'] = day_night
 
-    T4_thresh = 310.0 if day_night == 'N' else 325.0
-    fire = detect_fire_simple(T4, T11, T4_thresh=T4_thresh)
+    if fire_fn is not None:
+        fire = fire_fn(T4, T11, pf['NDVI'])
+    else:
+        T4_thresh = 310.0 if day_night == 'N' else 325.0
+        fire = detect_fire_simple(T4, T11, T4_thresh=T4_thresh)
 
     valid = np.isfinite(lat) & np.isfinite(lon) & np.isfinite(T4)
     row_idx = ((gs['lat_max'] - lat) / GRID_RES).astype(np.int32)
@@ -285,9 +326,24 @@ def process_sweep(filepath: str, gs: dict[str, Any],
     gs['obs_count'][r, c] += 1
     gs['fire_count'][r, c] += fire[in_bounds].astype(np.int32)
 
+    # ── Running accumulators for ML aggregate features ──
+    T4_ib = T4[in_bounds]
+    T11_ib = T11[in_bounds]
+    gs['T4_max'][r, c] = np.maximum(gs['T4_max'][r, c], T4_ib)
+    gs['T4_sum'][r, c] += T4_ib.astype(np.float64)
+    gs['T11_sum'][r, c] += T11_ib.astype(np.float64)
+    gs['dT_max'][r, c] = np.maximum(gs['dT_max'][r, c], T4_ib - T11_ib)
+
     # ── Current sweep NDVI ──
     sweep_ndvi = pf['NDVI'][in_bounds]
     is_sunlit = np.isfinite(sweep_ndvi)
+
+    # Daytime NDVI accumulators
+    if np.any(is_sunlit):
+        rs, cs, nv = r[is_sunlit], c[is_sunlit], sweep_ndvi[is_sunlit]
+        gs['NDVI_min'][rs, cs] = np.minimum(gs['NDVI_min'][rs, cs], nv)
+        gs['NDVI_sum'][rs, cs] += nv.astype(np.float64)
+        gs['NDVI_obs'][rs, cs] += 1
 
     # ── Set NDVI baseline (first valid daytime obs, write-once) ──
     no_baseline = np.isnan(gs['NDVI_baseline'][r, c])
@@ -297,10 +353,17 @@ def process_sweep(filepath: str, gs: dict[str, Any],
     # ── Detect vegetation loss at fire pixels ──
     fire_here = fire[in_bounds]
     has_baseline = np.isfinite(gs['NDVI_baseline'][r, c])
+    is_night = ~is_sunlit
+
+    # Daytime: fire + NDVI drop confirms vegetation loss
     with np.errstate(invalid='ignore'):
         veg_drop = gs['NDVI_baseline'][r, c] - sweep_ndvi
-        veg_lost = has_baseline & is_sunlit & (veg_drop >= VEG_LOSS_THRESHOLD)
-    newly_confirmed = fire_here & veg_lost
+        day_veg_lost = has_baseline & is_sunlit & (veg_drop >= VEG_LOSS_THRESHOLD)
+
+    # Nighttime: fire alone confirms vegetation loss (fewer FP at night)
+    night_veg_lost = has_baseline & is_night
+
+    newly_confirmed = fire_here & (day_veg_lost | night_veg_lost)
     gs['veg_confirmed'][r, c] = gs['veg_confirmed'][r, c] | newly_confirmed
 
     # ── VNIR update: two paths ──
@@ -332,6 +395,18 @@ def process_sweep(filepath: str, gs: dict[str, Any],
         'NDVI': NDVI[in_bounds],
         'fire': fire[in_bounds],
     })
+
+    # ── Clear accumulators where fire has passed (veg gone, no current fire) ──
+    cleared = gs['veg_confirmed'] & (gs['fire_count'] == 0)
+    if np.any(cleared):
+        gs['T4_max'][cleared] = -np.inf
+        gs['T4_sum'][cleared] = 0
+        gs['T11_sum'][cleared] = 0
+        gs['dT_max'][cleared] = -np.inf
+        gs['NDVI_min'][cleared] = np.inf
+        gs['NDVI_sum'][cleared] = 0
+        gs['NDVI_obs'][cleared] = 0
+        gs['obs_count'][cleared] = 0
 
     return int(fire[in_bounds].sum()), day_night
 
