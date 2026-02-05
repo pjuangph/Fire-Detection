@@ -4,11 +4,17 @@ Team Flaming Kitty's AI Fire Detection code! 🔥🐱
 ## Table of Contents
 - [What Is This Data?](#what-is-this-data)
 - [How the Instrument Works](#how-the-instrument-works)
+- [MASTER Channel Reference](#master-channel-reference)
 - [Dataset Parameters](#dataset-parameters)
 - [Key Equations](#key-equations)
 - [How Fire Detection Works](#how-fire-detection-works)
+- [Multi-Pass Consistency Filter](#multi-pass-consistency-filter)
+- [SWIR for False Positive Rejection](#swir-for-false-positive-rejection)
+- [Flight Mosaics](#flight-mosaics)
+- [ML Fire Detection](#ml-fire-detection)
 - [Examples: Fire vs No Fire](#examples-fire-vs-no-fire)
 - [Running the Code](#running-the-code)
+- [References](#references)
 
 ---
 
@@ -83,6 +89,74 @@ Before and after each scan, the mirror views two internal **blackbody references
 
 ---
 
+## MASTER Channel Reference
+
+All 50 channels with their wavelengths and roles:
+
+| Ch | Wavelength (μm) | Band | Role in This Project |
+|----|-----------------|------|---------------------|
+| 1 | 0.462 | VNIR | — |
+| 2 | 0.500 | VNIR | — |
+| 3 | 0.542 | VNIR | — |
+| 4 | 0.582 | VNIR | — |
+| 5 | 0.654 | VNIR | — |
+| 6 | 0.712 | VNIR | — |
+| 7 | 0.752 | VNIR | — |
+| 8 | 0.802 | VNIR | — |
+| 9 | 0.866 | VNIR | — |
+| 10 | 0.906 | VNIR | — |
+| 11 | 0.946 | VNIR | — |
+| 12 | 1.602 | SWIR | — |
+| 13 | 1.660 | SWIR | — |
+| 14 | 1.714 | SWIR | — |
+| 15 | 1.768 | SWIR | — |
+| 16 | 1.818 | SWIR | — |
+| 17 | 1.876 | SWIR | — |
+| 18 | 1.928 | SWIR | H₂O absorption |
+| 19 | 1.976 | SWIR | H₂O absorption |
+| 20 | 2.078 | SWIR | — |
+| 21 | 2.162 | SWIR | — |
+| **22** | **2.212** | **SWIR** | **Solar reflection channel** — used to distinguish sun glint FP from fire |
+| 23 | 2.262 | SWIR | — |
+| 24 | 2.320 | SWIR | — |
+| 25 | 2.390 | SWIR | — |
+| 26 | 4.058 | MWIR | — |
+| 27 | 3.286 | MWIR | — |
+| 28 | 3.442 | MWIR | — |
+| 29 | 3.597 | MWIR | — |
+| 30 | 3.746 | MWIR | — |
+| **31** | **3.903** | **MWIR** | **T4 — primary fire detection channel** |
+| 32 | 4.058 | MWIR | — |
+| 33 | 4.245 | MWIR | — |
+| 34 | 4.379 | MWIR | CO₂ absorption |
+| 35 | 4.516 | MWIR | — |
+| 36 | 4.668 | MWIR | — |
+| 37 | 4.819 | MWIR | — |
+| 38 | 4.966 | MWIR | — |
+| 39 | 5.110 | MWIR | — |
+| 40 | 5.258 | MWIR | — |
+| 41 | 7.785 | TIR | — |
+| 42 | 8.188 | TIR | — |
+| 43 | 8.620 | TIR | — |
+| 44 | 9.054 | TIR | — |
+| 45 | 9.695 | TIR | O₃ absorption |
+| 46 | 10.107 | TIR | — |
+| 47 | 10.637 | TIR | — |
+| **48** | **11.327** | **TIR** | **T11 — background temperature channel** |
+| 49 | 12.135 | TIR | — |
+| 50 | 12.874 | TIR | — |
+
+### Band Groups Summary
+
+| Band Group | Channels | Wavelength Range | What They See |
+|------------|----------|-----------------|---------------|
+| **VNIR** (Visible/Near-IR) | 1–11 | 0.46 – 0.95 μm | Reflected sunlight. Similar to what a camera sees, plus near-infrared. Useful for vegetation, clouds, land cover. |
+| **SWIR** (Short-Wave IR) | 12–25 | 1.60 – 2.39 μm | Mix of reflected sunlight and thermal emission. Sensitive to minerals, soil moisture. **Ch 22 (2.21 μm)** used to identify reflective surfaces causing false positives. |
+| **MWIR** (Mid-Wave IR) | 26–40 | 3.29 – 5.26 μm | **The fire detection sweet spot.** Fire (600–1200 K) emits enormously more radiation than cool background (~300 K). **Ch 31 (3.90 μm)** is the primary fire channel. |
+| **TIR** (Thermal IR) | 41–50 | 7.79 – 12.87 μm | Pure thermal emission. Measures surface temperature regardless of sunlight. **Ch 48 (11.33 μm)** provides background temperature. |
+
+---
+
 ## Dataset Parameters
 
 Each HDF4 file contains 38 datasets. Here are the important ones grouped by category:
@@ -110,15 +184,6 @@ Each HDF4 file contains 38 datasets. Here are the important ones grouped by cate
 | `Left50%ResponseWavelength` | (50,) | μm | The short-wavelength edge of each channel's spectral response (at 50% of peak). |
 | `Right50%ResponseWavelength` | (50,) | μm | The long-wavelength edge. Together with the left edge, these define the bandwidth of each channel. |
 | `SolarSpectralIrradiance` | (50,) | W/m²/μm | How much sunlight arrives at the top of the atmosphere in each channel's band. Used for reflectance calculations. |
-
-### The 50 Channels at a Glance
-
-| Channel Group | Channels | Wavelength Range | What They See |
-|--------------|----------|-----------------|---------------|
-| **VNIR** (Visible/Near-IR) | 1-11 | 0.46 – 0.95 μm | Reflected sunlight. Similar to what a camera sees, plus near-infrared. Useful for vegetation, clouds, land cover. |
-| **SWIR** (Short-Wave IR) | 12-25 | 1.60 – 2.39 μm | Mix of reflected sunlight and thermal emission. Sensitive to minerals, soil moisture, and very hot fires. |
-| **MWIR** (Mid-Wave IR) | 26-40 | 3.30 – 5.26 μm | **The fire detection sweet spot.** At these wavelengths, fire (600-1200 K) emits enormously more radiation than the cool background (~300 K). Channel 31 (3.915 μm) is the primary fire channel. |
-| **TIR** (Thermal IR) | 41-50 | 7.83 – 12.86 μm | Pure thermal emission from the ground. Measures surface temperature regardless of sunlight. Channel 48 (11.25 μm) provides background temperature. |
 
 ### Viewing and Solar Geometry
 
@@ -272,6 +337,184 @@ A pixel is classified as **fire** if it passes **either** test (union). This giv
 
 ---
 
+## Multi-Pass Consistency Filter
+
+### Problem
+
+The mosaic assembles multiple flight lines into a single image. Previously, fire detection used OR logic: if a pixel triggered the fire threshold in **any** flight line, it was marked as fire. But the same ground pixel is observed from multiple flight lines at different viewing angles.
+
+False positives from solar reflection are **angle-dependent** — they trigger in one pass but not others. Real fire emits thermally in all directions (isotropic) and triggers **consistently** across passes.
+
+### Solution
+
+Instead of OR logic, we track how many times each grid cell was:
+1. **Observed** (any valid data from any flight line)
+2. **Detected as fire** (triggered the threshold)
+
+A pixel is only classified as fire if it was detected in **at least 2 passes** when observed multiple times. Single-observation pixels keep their detection (no multi-pass info available to filter).
+
+```python
+# Per grid cell, across all flight lines:
+grid_obs_count[r, c] += 1                                  # count every valid observation
+grid_fire_count[r, c] += fire[in_bounds].astype(np.int32)  # count fire detections
+
+# Final fire mask with consistency threshold:
+multi_pass = grid_obs_count >= 2
+grid_fire = np.where(
+    multi_pass,
+    grid_fire_count >= 2,    # seen multiple times → require ≥2 detections
+    grid_fire_count >= 1     # seen only once → keep single detection
+)
+```
+
+### Results
+
+| Flight | Before (OR) | After (consistency) | Eliminated |
+|--------|------------|--------------------|-----------:|
+| 03 (pre-burn, no fire) | 135 FP | 65 FP | **70 (52%)** |
+| 04 (day burn) | ~3,100 | 3,064 (3,045 multi-pass, 19 single-pass) | ~36 |
+| 05 (night burn) | ~1,730 | 1,712 (1,704 multi-pass, 8 single-pass) | ~18 |
+| 06 (day burn) | ~3,320 | 3,305 (3,293 multi-pass, 12 single-pass) | ~15 |
+
+The filter cut pre-burn false positives by 52%. Real fire detections are >99% multi-pass confirmed, validating the physics: fire emission is isotropic and triggers consistently regardless of viewing angle, while solar reflection artifacts are angle-dependent and trigger inconsistently.
+
+---
+
+## SWIR for False Positive Rejection
+
+### Why SWIR Matters
+
+The remaining false positives are pixels where sun-heated rock or soil reflects sunlight strongly at 3.9 μm, mimicking a fire signal. The **Short-Wave Infrared (SWIR)** at 2.16 μm (Channel 22) helps distinguish these:
+
+| Source | T4 (3.9 μm) | SWIR (2.16 μm) | Reason |
+|--------|-------------|-----------------|--------|
+| **Fire** | Very high (thermal emission) | Low-to-moderate | Fire emits thermally; at 2.16 μm, a 800 K fire emits far less than at 3.9 μm |
+| **Sun-heated rock** | Elevated (solar reflection) | **High** (solar reflection) | Rock reflects sunlight across the entire solar spectrum including SWIR |
+| **Background** | Low (~300 K) | Moderate | Normal terrain with typical solar reflectance |
+
+During **daytime**: high SWIR with high T4 suggests reflection (false positive), while high T4 with low SWIR suggests fire.
+
+During **nighttime**: SWIR is near-zero for everything (no sunlight), so it provides no discrimination — but nighttime flights already have fewer FP because there's no solar reflection.
+
+### Implementation
+
+SWIR radiance from Channel 22 (2.212 μm) is extracted alongside T4 and T11, gridded onto the mosaic, and available as:
+- A visual diagnostic (bottom-left panel in burn location plots)
+- A 4th feature for the ML model: `[T4, T11, ΔT, SWIR]`
+
+---
+
+## Flight Mosaics
+
+`mosaic_flight.py` assembles all flight lines from a single flight into one georeferenced composite image.
+
+### What It Does
+
+Each HDF4 file contains one flight line — a single pass of the aircraft over the target area. A full flight consists of many parallel passes (9 to 40 lines). The script:
+
+1. Groups all HDF files by flight number
+2. Creates a regular latitude/longitude grid covering the full flight extent
+3. Processes each file in chronological order, projecting pixels onto the grid
+4. Runs fire detection on each file
+5. Applies the multi-pass consistency filter
+6. Composites everything into a single image per flight
+
+```
+Flight line 1:   ═══════════════
+Flight line 2:     ═══════════════
+Flight line 3:   ═══════════════
+    ...                              →  Combined mosaic
+Flight line N:     ═══════════════
+```
+
+### Key Variables
+
+- **grid_T4** — Brightness temperature at **~3.9 μm** (Channel 31) [K]. The **fire detection channel**. Fire (600–1200 K) can be **23,000× brighter** than the cool background (~300 K) at this wavelength.
+- **grid_T11** — Brightness temperature at **~11.25 μm** (Channel 48) [K]. The **background temperature channel**. Fire is only ~4× brighter than background at this wavelength.
+- **grid_SWIR** — Calibrated radiance at **~2.16 μm** (Channel 22) [W/m²/sr/μm]. The **solar reflection channel**. High values during daytime indicate reflective surfaces.
+- **grid_fire_count** — Number of times each grid cell was detected as fire across all flight lines.
+- **grid_obs_count** — Number of times each grid cell was observed (any valid data).
+
+| Scenario | T4 (3.9 μm) | T11 (11.25 μm) | ΔT = T4 − T11 | Detected? |
+|----------|-------------|-----------------|----------------|-----------|
+| Cool ground | 290 K | 288 K | 2 K | No — both low, small ΔT |
+| Sun-heated rock | 320 K | 315 K | 5 K | No — warm but ΔT < 10 K |
+| Active fire | 600 K | 330 K | 270 K | **Yes** — T4 > 325 K AND ΔT > 10 K |
+
+### Grid Construction
+
+- **Bounding box**: From `lat_LL/UL/LR/UR` and `lon_LL/UL/LR/UR` attributes plus 0.005° (~550 m) buffer
+- **Resolution**: 0.00025° per grid cell ≈ **28 meters** at 36°N latitude
+- **Orientation**: Row 0 = northernmost latitude (top), Column 0 = westernmost longitude (left)
+
+| Resolution | Grid size (Flight 04) | Tradeoff |
+|-----------|----------------------|----------|
+| 0.00007° (~8 m, native) | ~2200 × 5600 = 12M cells | Full detail, slower processing |
+| **0.00025° (~28 m, default)** | **~730 × 1120 = 817K cells** | **Good detail, fast** |
+| 0.001° (~111 m) | ~180 × 280 = 50K cells | Quick preview, blurry |
+
+### Fire Detection in the Mosaic
+
+Uses a simplified absolute threshold (no contextual test) for speed:
+- **T4 > threshold**: 325 K (day) or 310 K (night)
+- **ΔT > 10 K**: Confirms spectral fire signature
+
+| | Daytime | Nighttime |
+|---|---------|-----------|
+| **Threshold** | 325 K (52°C) | 310 K (37°C) |
+| **Background T4** | 290–320 K | 260–290 K |
+| **Reason** | Solar heating warms surfaces to 310–320 K | No solar heating; background cools significantly |
+
+### Assumptions and Limitations
+
+1. **Flat-grid approximation**: Equirectangular projection. At 36°N over ~0.3°, distortion is <0.5%.
+2. **Nearest-neighbor resampling**: Each source pixel maps to the single nearest grid cell. No interpolation.
+3. **No atmospheric correction**: Acceptable for fire detection because fire signals dominate atmospheric effects.
+4. **Simplified fire detection**: Only absolute threshold test (not contextual anomaly) for processing speed.
+5. **Temporal compositing**: "Last write wins" for T4/T11/SWIR. Fire mask uses multi-pass consistency.
+6. **Day/night classification**: Per-flight, not per-pixel.
+
+---
+
+## ML Fire Detection
+
+`fire_ml.py` trains a neural network to classify fire vs. non-fire pixels using 4 spectral features.
+
+### Features
+
+| Feature | Source | Units | Why It Helps |
+|---------|--------|-------|-------------|
+| T4 | Channel 31 (3.9 μm) | K | Primary fire signal — fire is extremely bright at this wavelength |
+| T11 | Channel 48 (11.3 μm) | K | Background temperature — provides thermal context |
+| ΔT | T4 − T11 | K | Spectral fingerprint — fire has disproportionately high T4 vs T11 |
+| SWIR | Channel 22 (2.2 μm) | W/m²/sr/μm | Solar reflection — high SWIR with high T4 suggests reflection, not fire |
+
+### Loss Function: Soft Dice Loss
+
+Standard losses like binary cross-entropy (BCE) are diluted by the massive number of true negatives (~99.4% of pixels are not fire). Dice Loss operates on absolute TP/FP/FN counts:
+
+$$\text{Dice Loss} = 1 - \frac{2 \cdot TP}{2 \cdot TP + FP + FN}$$
+
+True negatives (TN) **do not appear** in the formula. 100 FP out of 1,000 pixels gives the same loss as 100 FP out of 1,000,000 pixels. Every false positive and every missed fire directly degrades the score.
+
+For training, we use a combined **Dice + BCE** loss (50/50 weight) — BCE provides per-pixel gradient signals that help early training converge when Dice alone gets stuck.
+
+### Architecture
+
+```
+Input (4 features) → Linear(64) → ReLU → Linear(32) → ReLU → Linear(1) → Sigmoid
+```
+
+2,337 parameters. Trained with minority class oversampling (fire upsampled to 50/50 balance).
+
+### Train/Test Split
+
+- **Train**: Flights 03 (pre-burn) + 04 (day burn) + 05 (night burn)
+- **Test**: Flight 06 (day burn, unseen)
+- Labels: Pseudo-labels from the threshold detector
+
+---
+
 ## Examples: Fire vs No Fire
 
 ### Pre-Burn (No Fire)
@@ -339,7 +582,7 @@ This shows the same scene across 6 different channels spanning the full spectrum
 ### Requirements
 
 ```
-pip install pyhdf numpy matplotlib
+pip install pyhdf numpy matplotlib torch scikit-learn
 ```
 
 Note: `pyhdf` may require HDF4 libraries. On macOS with conda/mamba:
@@ -349,12 +592,13 @@ conda install -c conda-forge pyhdf
 
 ### Scripts
 
-| Script | Purpose | Documentation |
-|--------|---------|---------------|
-| `plotdata.py` | Explore the HDF files — plots radiance across channels and a georeferenced thermal image | — |
-| `detect_fire.py` | Run fire detection — compares a pre-burn file to a burn file, produces detection maps | — |
-| `mosaic_flight.py` | Assemble all flight lines into a single georeferenced mosaic per flight | [mosaic_flight.md](mosaic_flight.md) |
-| `plot_burn_locations.py` | Per-flight 2x2 analysis: burn locations, T4, T11, and detection space scatter | — |
+| Script | Purpose |
+|--------|---------|
+| `plotdata.py` | Explore the HDF files — plots radiance across channels and a georeferenced thermal image |
+| `detect_fire.py` | Run fire detection — compares a pre-burn file to a burn file, produces detection maps |
+| `mosaic_flight.py` | Assemble all flight lines into a single georeferenced mosaic per flight with multi-pass consistency filter |
+| `plot_burn_locations.py` | Per-flight 2x2 analysis: burn locations, T4, SWIR, and detection space scatter |
+| `fire_ml.py` | Train ML fire detector with Dice Loss using T4, T11, ΔT, SWIR features |
 
 ```bash
 python detect_fire.py
@@ -370,7 +614,7 @@ This produces (in `plots/`):
 python mosaic_flight.py
 ```
 
-This produces one mosaic per flight in `plots/` (see [mosaic_flight.md](mosaic_flight.md) for details):
+This produces one mosaic per flight in `plots/`:
 - `mosaic_flight_2480103.png` — Pre-burn, 9 lines composited
 - `mosaic_flight_2480104.png` — First fire flight, 40 lines composited
 - `mosaic_flight_2480105.png` — Night fire flight, 16 lines composited
@@ -380,11 +624,21 @@ This produces one mosaic per flight in `plots/` (see [mosaic_flight.md](mosaic_f
 python plot_burn_locations.py
 ```
 
-This produces one PNG per flight in `plots/`, each with a 2x2 layout (burn locations, T4, T11, detection space scatter):
+This produces one PNG per flight in `plots/`, each with a 2x2 layout (burn locations, T4, SWIR, detection space scatter):
 - `burn_locations_2480103.png` — Pre-burn false positive analysis
 - `burn_locations_2480104.png` — First fire flight (Blowdown)
 - `burn_locations_2480105.png` — Night fire flight (Lakes Unit)
 - `burn_locations_2480106.png` — Third fire flight (Blowdown)
+
+```bash
+python fire_ml.py
+```
+
+This trains the ML model and produces:
+- `ml_training_loss.png` — Dice Loss convergence curve
+- `ml_decision_boundary.png` — Learned decision boundary vs threshold lines
+- `ml_prediction_map_2480106.png` — Spatial fire predictions on test flight
+- `ml_fpfn_comparison_2480106.png` — FP/FN spatial map
 
 ### Data
 

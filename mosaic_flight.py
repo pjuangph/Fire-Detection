@@ -22,8 +22,9 @@ C_LIGHT  = 2.99792458e8     # speed of light [m/s]
 K_BOLTZ  = 1.380649e-23     # Boltzmann constant [J/K]
 
 # MASTER channel indices (0-based)
-CH_T4  = 30   # Ch 31: effective wavelength 3.9029 μm, MWIR fire channel
-CH_T11 = 47   # Ch 48: effective wavelength 11.3274 μm, TIR background channel
+CH_T4   = 30   # Ch 31: effective wavelength 3.9029 μm, MWIR fire channel
+CH_T11  = 47   # Ch 48: effective wavelength 11.3274 μm, TIR background channel
+CH_SWIR = 21   # Ch 22: nominal wavelength 2.162 μm, SWIR solar reflection channel
 
 # Grid resolution: 0.00025 degrees ≈ 28 m at 36°N latitude.
 # Native MASTER pixel spacing is ~8 m; this is ~3× downsampled for speed.
@@ -52,21 +53,23 @@ def radiance_to_bt(radiance_um, wavelength_um):
 
 
 def process_file(filepath):
-    """Load one HDF4 file and return T4, T11, lat, lon arrays.
+    """Load one HDF4 file and return T4, T11, SWIR, lat, lon arrays.
 
     Returns:
-        T4:  Brightness temperature at ~3.9 μm [K], shape (scanlines, 716).
-        T11: Brightness temperature at ~11.25 μm [K], shape (scanlines, 716).
-        lat: Pixel latitude [degrees], shape (scanlines, 716).
-        lon: Pixel longitude [degrees], shape (scanlines, 716).
+        T4:   Brightness temperature at ~3.9 μm [K], shape (scanlines, 716).
+        T11:  Brightness temperature at ~11.25 μm [K], shape (scanlines, 716).
+        SWIR: Calibrated radiance at ~2.16 μm [W/m²/sr/μm], shape (scanlines, 716).
+        lat:  Pixel latitude [degrees], shape (scanlines, 716).
+        lon:  Pixel longitude [degrees], shape (scanlines, 716).
     """
     f = SD(filepath, SDC.READ)
 
     cal_ds = f.select('CalibratedData')
     scale_factors = cal_ds.attributes()['scale_factor']
-    # Read only the two fire-relevant channels; apply scale_factor -> [W/m²/sr/μm]
-    raw_t4 = cal_ds[:, CH_T4, :].astype(np.float32) * scale_factors[CH_T4]   # [W/m²/sr/μm]
-    raw_t11 = cal_ds[:, CH_T11, :].astype(np.float32) * scale_factors[CH_T11] # [W/m²/sr/μm]
+    # Read fire-relevant channels + SWIR; apply scale_factor -> [W/m²/sr/μm]
+    raw_t4 = cal_ds[:, CH_T4, :].astype(np.float32) * scale_factors[CH_T4]     # [W/m²/sr/μm]
+    raw_t11 = cal_ds[:, CH_T11, :].astype(np.float32) * scale_factors[CH_T11]   # [W/m²/sr/μm]
+    raw_swir = cal_ds[:, CH_SWIR, :].astype(np.float32) * scale_factors[CH_SWIR] # [W/m²/sr/μm]
     cal_ds.endaccess()
 
     lat = f.select('PixelLatitude')[:]   # [degrees]
@@ -81,6 +84,7 @@ def process_file(filepath):
     # Mask fill values (-999) and negative radiance
     raw_t4[raw_t4 < 0] = np.nan
     raw_t11[raw_t11 < 0] = np.nan
+    raw_swir[raw_swir < 0] = np.nan
     lat[lat == -999.0] = np.nan
     lon[lon == -999.0] = np.nan
 
@@ -91,7 +95,12 @@ def process_file(filepath):
     T11 = radiance_to_bt(raw_t11, eff_wl[CH_T11])
     T11 = temp_slope[CH_T11] * T11 + temp_intercept[CH_T11]  # post-Planck correction [K]
 
-    return T4, T11, lat, lon
+    # SWIR stays as radiance — it's a reflected solar band, not thermal emission.
+    # No Planck inversion is appropriate. High SWIR radiance during daytime indicates
+    # bright/reflective surfaces (rock, soil) that may cause T4 false positives.
+    SWIR = raw_swir
+
+    return T4, T11, SWIR, lat, lon
 
 
 def detect_fire_simple(T4, T11, T4_thresh=325.0, dT_thresh=10.0):
@@ -153,14 +162,20 @@ def build_mosaic(files, lat_min, lat_max, lon_min, lon_max, day_night='D'):
     """Build a gridded mosaic from a list of flight line files.
 
     Files are processed in order (chronological), so later lines overwrite earlier
-    ones in overlapping areas. Returns gridded T4, T11, fire mask, and axes.
+    ones in overlapping areas. A multi-pass consistency filter requires fire to be
+    detected in >=2 passes for pixels observed multiple times, filtering out
+    angle-dependent false positives (e.g. solar reflection).
+
+    Returns gridded T4, T11, SWIR, fire mask, axes, fire_count, and obs_count.
     """
     nrows = int(np.ceil((lat_max - lat_min) / GRID_RES))
     ncols = int(np.ceil((lon_max - lon_min) / GRID_RES))
 
     grid_T4 = np.full((nrows, ncols), np.nan, dtype=np.float32)    # [K]
     grid_T11 = np.full((nrows, ncols), np.nan, dtype=np.float32)  # [K]
-    grid_fire = np.zeros((nrows, ncols), dtype=bool)              # True = fire pixel
+    grid_SWIR = np.full((nrows, ncols), np.nan, dtype=np.float32)  # [W/m²/sr/μm]
+    grid_fire_count = np.zeros((nrows, ncols), dtype=np.int32)     # times detected as fire
+    grid_obs_count = np.zeros((nrows, ncols), dtype=np.int32)      # times observed (valid data)
 
     # Night threshold is lower (310 K) because there's no solar heating;
     # a 310 K pixel at night is already very anomalous.
@@ -171,7 +186,7 @@ def build_mosaic(files, lat_min, lat_max, lon_min, lon_max, day_night='D'):
         name = os.path.basename(filepath)
         print(f'  [{i+1}/{len(files)}] {name}')
 
-        T4, T11, lat, lon = process_file(filepath)
+        T4, T11, SWIR, lat, lon = process_file(filepath)
         fire = detect_fire_simple(T4, T11, T4_thresh=T4_thresh)
 
         # Map pixel lat/lon [degrees] to grid row/col indices
@@ -190,13 +205,24 @@ def build_mosaic(files, lat_min, lat_max, lon_min, lon_max, day_night='D'):
         c = col_idx[in_bounds]
         grid_T4[r, c] = T4[in_bounds]
         grid_T11[r, c] = T11[in_bounds]
-        # Fire: OR with existing (fire in any pass counts)
-        grid_fire[r, c] |= fire[in_bounds]
+        grid_SWIR[r, c] = SWIR[in_bounds]
+        grid_obs_count[r, c] += 1
+        grid_fire_count[r, c] += fire[in_bounds].astype(np.int32)
+
+    # Multi-pass consistency filter:
+    # - Pixels observed >=2 times must trigger fire in >=2 passes (filters angle-dependent FP)
+    # - Pixels observed only once keep their single detection (no multi-pass info available)
+    multi_pass = grid_obs_count >= 2
+    grid_fire = np.where(
+        multi_pass,
+        grid_fire_count >= 2,
+        grid_fire_count >= 1
+    )
 
     lat_axis = np.linspace(lat_max, lat_min, nrows)
     lon_axis = np.linspace(lon_min, lon_max, ncols)
 
-    return grid_T4, grid_T11, grid_fire, lat_axis, lon_axis
+    return grid_T4, grid_T11, grid_SWIR, grid_fire, lat_axis, lon_axis, grid_fire_count, grid_obs_count
 
 
 def plot_mosaic(grid_T4, grid_fire, lat_axis, lon_axis, flight_num, comment, n_files):
@@ -270,14 +296,16 @@ def main():
         print(f'  Extent: lat [{lat_min:.4f}, {lat_max:.4f}], '
               f'lon [{lon_min:.4f}, {lon_max:.4f}]')
 
-        grid_T4, grid_T11, grid_fire, lat_axis, lon_axis = build_mosaic(
+        grid_T4, grid_T11, grid_SWIR, grid_fire, lat_axis, lon_axis, grid_fire_count, grid_obs_count = build_mosaic(
             files, lat_min, lat_max, lon_min, lon_max, day_night)
 
         valid_pix = np.sum(np.isfinite(grid_T4))
         fire_pix = np.sum(grid_fire)
+        multi_pass_confirmed = np.sum(grid_fire & (grid_obs_count >= 2))
+        single_pass_only = np.sum(grid_fire & (grid_obs_count < 2))
         coverage = 100.0 * valid_pix / (nrows * ncols)
         print(f'  Coverage: {coverage:.1f}% of grid filled')
-        print(f'  Fire pixels: {fire_pix:,}')
+        print(f'  Fire pixels: {fire_pix:,} ({multi_pass_confirmed:,} multi-pass, {single_pass_only:,} single-pass)')
 
         plot_mosaic(grid_T4, grid_fire, lat_axis, lon_axis,
                     fnum, comment, len(files))

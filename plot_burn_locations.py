@@ -1,9 +1,9 @@
-"""plot_burn_locations.py - Visualize burn locations, T4, T11, and detection error per flight.
+"""plot_burn_locations.py - Visualize burn locations, T4, SWIR, and detection error per flight.
 
 Creates one PNG per flight with a 2x2 layout:
   Top-left:     Fire/false-positive locations on gray background
   Top-right:    T4 brightness temperature (3.9 μm fire channel)
-  Bottom-left:  T11 brightness temperature (11.25 μm background channel)
+  Bottom-left:  SWIR radiance (2.16 μm solar reflection channel)
   Bottom-right: T4 vs ΔT scatter with pre-burn false positives overlaid as error reference
 
 The pre-burn flight (24-801-03) is processed first to establish false positive
@@ -22,14 +22,17 @@ from mosaic_flight import (
 )
 
 
-def plot_single_flight(grid_T4, grid_T11, grid_fire, lat_axis, lon_axis,
+def plot_single_flight(grid_T4, grid_T11, grid_SWIR, grid_fire, lat_axis, lon_axis,
                        flight_num, comment, day_night, n_files,
-                       fp_T4=None, fp_dT=None):
+                       fp_T4=None, fp_dT=None, preburn_fp_rate=0.0):
     """Create a 2x2 figure for one flight and save to plots/.
 
     Args:
+        grid_SWIR: SWIR radiance at 2.16 μm [W/m²/sr/μm].
         fp_T4, fp_dT: Pre-burn false positive T4 and ΔT arrays. When provided,
             these are overlaid on the scatter plot so the error is visible.
+        preburn_fp_rate: False positive rate from pre-burn flight (FP per valid pixel).
+            Used to estimate error rate on burn flights.
     """
     extent = [lon_axis[0], lon_axis[-1], lat_axis[-1], lat_axis[0]]
 
@@ -43,8 +46,22 @@ def plot_single_flight(grid_T4, grid_T11, grid_fire, lat_axis, lon_axis,
 
     dn_label = 'Night' if day_night == 'N' else 'Day'
     fire_count = np.sum(grid_fire)
+    valid_count = np.sum(np.isfinite(grid_T4))
     T4_thresh = 310.0 if day_night == 'N' else 325.0
     is_preburn = flight_num == '24-801-03'
+
+    # Error rate: Error = (FN + FP) / P
+    # P = actual fire pixels, TP = correctly detected, FP = false positives
+    # FN = P - TP (missed fires), estimated as 0 for intense prescribed burns
+    # FP estimated from pre-burn false positive rate scaled to this flight's area
+    estimated_FP = preburn_fp_rate * valid_count if not is_preburn else fire_count
+    estimated_TP = max(fire_count - estimated_FP, 0) if not is_preburn else 0
+    # P ≈ TP when FN ≈ 0
+    estimated_P = estimated_TP if not is_preburn else 0
+    if not is_preburn and estimated_P > 0:
+        error_rate = (0 + estimated_FP) / estimated_P  # FN=0 assumption
+    else:
+        error_rate = None
     detection_label = 'False Positives' if is_preburn else 'Fire'
     detection_color = 'orange' if is_preburn else 'red'
 
@@ -76,14 +93,17 @@ def plot_single_flight(grid_T4, grid_T11, grid_fire, lat_axis, lon_axis,
     ax.set_ylabel('Latitude')
     plt.colorbar(im_t4, ax=ax, fraction=0.046, pad=0.04, label='K')
 
-    # --- Bottom-left: T11 brightness temperature ---
+    # --- Bottom-left: SWIR radiance ---
     ax = axes[1, 0]
-    im_t11 = ax.imshow(grid_T11, extent=extent, aspect='equal',
-                        cmap='inferno', vmin=vmin_t11, vmax=vmax_t11)
-    ax.set_title('T11 — 11.25 μm (background channel)')
+    valid_SWIR = grid_SWIR[np.isfinite(grid_SWIR)]
+    vmin_swir, vmax_swir = (np.percentile(valid_SWIR, [2, 98]) if len(valid_SWIR) > 0
+                            else (0, 1))
+    im_swir = ax.imshow(grid_SWIR, extent=extent, aspect='equal',
+                         cmap='viridis', vmin=vmin_swir, vmax=vmax_swir)
+    ax.set_title('SWIR — 2.16 μm (solar reflection)')
     ax.set_xlabel('Longitude')
     ax.set_ylabel('Latitude')
-    plt.colorbar(im_t11, ax=ax, fraction=0.046, pad=0.04, label='K')
+    plt.colorbar(im_swir, ax=ax, fraction=0.046, pad=0.04, label='W/m²/sr/μm')
 
     # --- Bottom-right: T4 vs ΔT detection space scatter ---
     ax = axes[1, 1]
@@ -141,6 +161,31 @@ def plot_single_flight(grid_T4, grid_T11, grid_fire, lat_axis, lon_axis,
 
     ax.legend(fontsize=7, loc='upper left')
 
+    # Error rate annotation
+    if not is_preburn and error_rate is not None:
+        error_text = (
+            f'Error Rate = (FN + FP) / P\n'
+            f'Est. FP: {estimated_FP:.0f}  (from pre-burn rate)\n'
+            f'Est. TP: {estimated_TP:.0f}  (detections − FP)\n'
+            f'FN ≈ 0  (assumed for intense burns)\n'
+            f'P ≈ TP = {estimated_P:.0f}\n'
+            f'Error rate ≈ {error_rate:.2%}'
+        )
+        ax.text(0.98, 0.98, error_text, transform=ax.transAxes,
+                fontsize=7, verticalalignment='top', horizontalalignment='right',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.85),
+                family='monospace')
+    elif is_preburn:
+        fp_text = (
+            f'Pre-burn: P = 0 (no actual fire)\n'
+            f'All {fire_count:,} detections are FP\n'
+            f'FP rate: {100.0 * fire_count / max(valid_count, 1):.4f}%'
+        )
+        ax.text(0.98, 0.98, fp_text, transform=ax.transAxes,
+                fontsize=7, verticalalignment='top', horizontalalignment='right',
+                bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.85),
+                family='monospace')
+
     plt.tight_layout()
     os.makedirs('plots', exist_ok=True)
     outname = f'plots/burn_locations_{flight_num.replace("-", "")}.png'
@@ -149,7 +194,6 @@ def plot_single_flight(grid_T4, grid_T11, grid_fire, lat_axis, lon_axis,
     plt.close()
 
     # Print stats
-    valid_count = np.sum(np.isfinite(grid_T4))
     rate = 100.0 * fire_count / max(valid_count, 1)
     print(f'  {detection_label}: {fire_count:,} / {valid_count:,} pixels ({rate:.4f}%)')
     if fire_count > 0:
@@ -159,6 +203,15 @@ def plot_single_flight(grid_T4, grid_T11, grid_fire, lat_axis, lon_axis,
               f'(mean {np.nanmean(fire_T11_vals):.1f} K)')
         print(f'    ΔT:  {np.nanmin(fire_dT_vals):.1f} – {np.nanmax(fire_dT_vals):.1f} K '
               f'(mean {np.nanmean(fire_dT_vals):.1f} K)')
+    if not is_preburn and error_rate is not None:
+        print(f'  Error rate (FN+FP)/P:')
+        print(f'    Est. FP = {estimated_FP:.0f} (pre-burn rate × {valid_count:,} pixels)')
+        print(f'    Est. TP = {estimated_TP:.0f} (detections − est. FP)')
+        print(f'    FN ≈ 0 (assumed for intense prescribed burns)')
+        print(f'    P ≈ TP = {estimated_P:.0f}')
+        print(f'    Error rate ≈ {error_rate:.4f} ({error_rate:.2%})')
+    elif is_preburn:
+        print(f'  Pre-burn FP rate: {fire_count} / {valid_count:,} = {rate/100:.6f}')
 
     return fire_T4_vals, fire_dT_vals
 
@@ -170,6 +223,7 @@ def main():
 
     # --- Step 1: Process pre-burn flight first to get false positive reference ---
     fp_T4, fp_dT = None, None
+    preburn_fp_rate = 0.0
     pre_fnum = '24-801-03'
     if pre_fnum in flights:
         info = flights[pre_fnum]
@@ -180,14 +234,26 @@ def main():
             print(f'    {os.path.basename(fi)}')
 
         lat_min, lat_max, lon_min, lon_max = compute_grid_extent(files)
-        grid_T4, grid_T11, grid_fire, lat_axis, lon_axis = build_mosaic(
+        grid_T4, grid_T11, grid_SWIR, grid_fire, lat_axis, lon_axis, grid_fire_count, grid_obs_count = build_mosaic(
             files, lat_min, lat_max, lon_min, lon_max, info['day_night'])
 
+        # Multi-pass stats
+        multi_pass_confirmed = np.sum(grid_fire & (grid_obs_count >= 2))
+        single_pass_only = np.sum(grid_fire & (grid_obs_count < 2))
+        print(f'  Multi-pass filter: {np.sum(grid_fire):,} fire pixels '
+              f'({multi_pass_confirmed:,} multi-pass, {single_pass_only:,} single-pass)')
+
+        # Compute pre-burn FP rate: all detections in pre-burn are false positives
+        preburn_valid = np.sum(np.isfinite(grid_T4))
+        preburn_fire = np.sum(grid_fire)
+        preburn_fp_rate = preburn_fire / max(preburn_valid, 1)
+
         fp_T4, fp_dT = plot_single_flight(
-            grid_T4, grid_T11, grid_fire, lat_axis, lon_axis,
+            grid_T4, grid_T11, grid_SWIR, grid_fire, lat_axis, lon_axis,
             pre_fnum, info['comment'], info['day_night'], len(files),
             fp_T4=None, fp_dT=None)
-        print(f'  → {len(fp_T4):,} false positive pixels will be shown on all burn flights\n')
+        print(f'  → {len(fp_T4):,} false positive pixels will be shown on all burn flights')
+        print(f'  → Pre-burn FP rate: {preburn_fp_rate:.6f} ({100*preburn_fp_rate:.4f}%)\n')
 
     # --- Step 2: Process burn flights with false positive overlay ---
     for fnum, info in sorted(flights.items()):
@@ -200,12 +266,19 @@ def main():
             print(f'    {os.path.basename(fi)}')
 
         lat_min, lat_max, lon_min, lon_max = compute_grid_extent(files)
-        grid_T4, grid_T11, grid_fire, lat_axis, lon_axis = build_mosaic(
+        grid_T4, grid_T11, grid_SWIR, grid_fire, lat_axis, lon_axis, grid_fire_count, grid_obs_count = build_mosaic(
             files, lat_min, lat_max, lon_min, lon_max, info['day_night'])
 
-        plot_single_flight(grid_T4, grid_T11, grid_fire, lat_axis, lon_axis,
+        # Multi-pass stats
+        multi_pass_confirmed = np.sum(grid_fire & (grid_obs_count >= 2))
+        single_pass_only = np.sum(grid_fire & (grid_obs_count < 2))
+        print(f'  Multi-pass filter: {np.sum(grid_fire):,} fire pixels '
+              f'({multi_pass_confirmed:,} multi-pass, {single_pass_only:,} single-pass)')
+
+        plot_single_flight(grid_T4, grid_T11, grid_SWIR, grid_fire, lat_axis, lon_axis,
                            fnum, info['comment'], info['day_night'], len(files),
-                           fp_T4=fp_T4, fp_dT=fp_dT)
+                           fp_T4=fp_T4, fp_dT=fp_dT,
+                           preburn_fp_rate=preburn_fp_rate)
         print()
 
     print('Done.')
