@@ -12,15 +12,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 from pyhdf.SD import SD, SDC
-
-# Physical constants
-H_PLANCK = 6.62607015e-34   # Planck constant, J*s
-C_LIGHT  = 2.99792458e8     # speed of light, m/s
-K_BOLTZ  = 1.380649e-23     # Boltzmann constant, J/K
-
-# MASTER channel indices (0-based)
-CH_T4  = 30   # Ch 31: ~3.9 um, MWIR fire channel
-CH_T11 = 47   # Ch 48: ~11.25 um, TIR background channel
+from lib import radiance_to_bt, detect_fire, is_daytime, CH_T4, CH_T11
 
 
 # ── Data Loading ───────────────────────────────────────────
@@ -73,24 +65,6 @@ def load_master_file(filepath):
 
 # ── Planck Conversion ─────────────────────────────────────
 
-def radiance_to_brightness_temp(radiance_um, wavelength_um):
-    """Convert spectral radiance (W/m2/sr/um) to brightness temperature (K).
-
-    Uses the inverse Planck function with the effective central wavelength.
-    """
-    lam = wavelength_um * 1e-6          # meters
-    L = radiance_um * 1e6               # W/m2/sr/m
-
-    c1 = 2.0 * H_PLANCK * C_LIGHT**2   # W*m2
-    c2 = H_PLANCK * C_LIGHT / K_BOLTZ   # m*K
-
-    with np.errstate(invalid='ignore', divide='ignore'):
-        T_b = c2 / lam / np.log(1.0 + c1 / (lam**5 * L))
-
-    T_b = np.where(np.isfinite(T_b) & (T_b > 0), T_b, np.nan)
-    return T_b
-
-
 def apply_temp_correction(T_planck, slope, intercept):
     """Apply MASTER post-Planck temperature correction: T = slope*T + intercept."""
     return slope * T_planck + intercept
@@ -103,132 +77,15 @@ def compute_fire_channels(data):
     """
     eff_wl = data['eff_wavelengths']
 
-    T4 = radiance_to_brightness_temp(data['radiance_t4'], eff_wl[CH_T4])
+    T4 = radiance_to_bt(data['radiance_t4'], eff_wl[CH_T4])
     T4 = apply_temp_correction(
         T4, data['temp_corr_slope'][CH_T4], data['temp_corr_intercept'][CH_T4])
 
-    T11 = radiance_to_brightness_temp(data['radiance_t11'], eff_wl[CH_T11])
+    T11 = radiance_to_bt(data['radiance_t11'], eff_wl[CH_T11])
     T11 = apply_temp_correction(
         T11, data['temp_corr_slope'][CH_T11], data['temp_corr_intercept'][CH_T11])
 
     return T4, T11
-
-
-# ── Fire Detection ─────────────────────────────────────────
-
-def is_daytime(solar_zenith, threshold=85.0):
-    """Return boolean mask: True where pixel is daytime (SZA < threshold).
-
-    Args:
-        solar_zenith: Solar zenith angle [degrees]. 0° = sun overhead, 90° = horizon.
-        threshold: Day/night boundary [degrees]. MODIS MOD14 uses 85°.
-    """
-    return solar_zenith < threshold
-
-
-def _contextual_stats(arr, window=61):
-    """Compute NaN-aware local mean and std using a cumulative-sum box filter.
-
-    Args:
-        arr: 2D array with possible NaN values.
-        window: square window size (must be odd).
-
-    Returns:
-        (local_mean, local_std) arrays, same shape as arr.
-    """
-    half = window // 2
-
-    valid = (~np.isnan(arr)).astype(np.float64)
-    filled = np.where(np.isnan(arr), 0.0, arr).astype(np.float64)
-
-    # Pad with reflection
-    valid_p = np.pad(valid, half, mode='reflect')
-    filled_p = np.pad(filled, half, mode='reflect')
-    filled2_p = np.pad(filled ** 2, half, mode='reflect')
-
-    # 2D cumulative sum (summed area table) with leading row/col of zeros
-    def sat(x):
-        s = np.cumsum(np.cumsum(x, axis=0), axis=1)
-        # Prepend a row and column of zeros for clean inclusion-exclusion
-        s = np.pad(s, ((1, 0), (1, 0)), mode='constant', constant_values=0)
-        return s
-
-    sv = sat(valid_p)
-    sf = sat(filled_p)
-    sf2 = sat(filled2_p)
-
-    # Extract rectangle sums using inclusion-exclusion
-    rows, cols = arr.shape
-    r1 = np.arange(rows)[:, None]
-    c1 = np.arange(cols)[None, :]
-    r2 = r1 + window
-    c2 = c1 + window
-
-    def rect_sum(s):
-        return (s[r2, c2] - s[r1, c2] - s[r2, c1] + s[r1, c1])
-
-    count = rect_sum(sv)
-    sum_f = rect_sum(sf)
-    sum_f2 = rect_sum(sf2)
-
-    count = np.maximum(count, 1)
-    local_mean = sum_f / count
-    local_var = sum_f2 / count - local_mean ** 2
-    local_std = np.sqrt(np.maximum(local_var, 0))
-
-    return local_mean, local_std
-
-
-def detect_fire(T4, T11, daytime,
-                T4_day_thresh=325.0,
-                T4_night_thresh=310.0,
-                delta_T_thresh=10.0,
-                context_window=61,
-                context_sigma=3.0):
-    """Run fire detection on a MASTER scene.
-
-    Args:
-        T4: Brightness temperature at ~3.9 μm [K].
-        T11: Brightness temperature at ~11.25 μm [K].
-        daytime: Boolean mask, True = daytime pixel.
-        T4_day_thresh: Daytime absolute T4 threshold [K]. Higher (325 K / 52°C)
-                       because solar heating naturally warms surfaces to 310-320 K.
-        T4_night_thresh: Nighttime absolute T4 threshold [K]. Lower (310 K / 37°C)
-                         because background cools to 260-290 K without sun.
-        delta_T_thresh: Minimum T4-T11 difference [K]. Separates fire (large dT)
-                        from warm ground (small dT).
-        context_window: Sliding window size [pixels]. 61 px ≈ 3 km at MASTER resolution.
-        context_sigma: Number of std deviations above local mean for anomaly [unitless].
-
-    Returns dict with detection masks and intermediate arrays.
-    """
-    delta_T = T4 - T11  # [K]
-
-    # --- Absolute threshold test ---
-    threshold = np.where(daytime, T4_day_thresh, T4_night_thresh)  # [K]
-    absolute_mask = (T4 > threshold) & (delta_T > delta_T_thresh)
-
-    # --- Contextual anomaly test ---
-    bg_mean_T4, bg_std_T4 = _contextual_stats(T4, context_window)
-    bg_mean_dT, bg_std_dT = _contextual_stats(delta_T, context_window)
-
-    contextual_mask = (
-        (T4 > bg_mean_T4 + context_sigma * bg_std_T4) &
-        (delta_T > bg_mean_dT + context_sigma * bg_std_dT) &
-        (delta_T > delta_T_thresh)
-    )
-
-    combined_mask = absolute_mask | contextual_mask
-
-    return {
-        'absolute_mask': absolute_mask,
-        'contextual_mask': contextual_mask,
-        'combined_mask': combined_mask,
-        'T4': T4,
-        'T11': T11,
-        'delta_T': delta_T,
-        'daytime': daytime,
-    }
 
 
 # ── Output ─────────────────────────────────────────────────
