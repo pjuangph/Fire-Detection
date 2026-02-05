@@ -23,7 +23,7 @@ Usage:
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, Dict
 
 import numpy as np
 import matplotlib
@@ -150,7 +150,7 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
 
 
 def simulate_flight(flight_num: str, files: list[str],
-                    comment: str) -> None:
+                    comment: str, gs: Dict[str,Any]) -> None:
     """Simulate real-time fire detection for one flight.
 
     Day/night is auto-detected per sweep from VNIR radiance.
@@ -159,6 +159,7 @@ def simulate_flight(flight_num: str, files: list[str],
         flight_num: flight identifier (e.g. '24-801-04').
         files: list of HDF file paths for this flight.
         comment: flight comment from HDF metadata.
+        gs (Dict[str,Any]): Dictionary of data that is updated by process_sweep
     """
     print('=' * 60)
     print(f'Real-Time Fire Detection Simulation')
@@ -166,8 +167,7 @@ def simulate_flight(flight_num: str, files: list[str],
     print(f'{len(files)} sweeps (day/night auto-detected per sweep)')
     print('=' * 60)
 
-    gs = init_grid_state()  # empty, grows dynamically per sweep
-
+    
     outdir = f'plots/realtime_{flight_num.replace("-", "")}'
     os.makedirs(outdir, exist_ok=True)
 
@@ -221,18 +221,16 @@ def simulate_flight(flight_num: str, files: list[str],
     print(f'    convert -delay 50 -loop 0 '
           f'{outdir}/frame_*.png {outdir}/animation.gif')
 
-
 def main() -> None:
     flights = group_files_by_flight()
+    gs = init_grid_state()  # empty, grows dynamically per sweep
 
     print(f'Scanned {len(flights)} flights:')
     for fnum, info in sorted(flights.items()):
         print(f'  {fnum}: {len(info["files"])} lines — {info["comment"]}')
     print()
-
     for fnum, info in sorted(flights.items()):
-        simulate_flight(fnum, info['files'], info['comment'])
-        print()
+        simulate_flight(fnum, info['files'], info['comment'], gs)
 
     print('All simulations complete.')
 
