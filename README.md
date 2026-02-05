@@ -1,5 +1,5 @@
 # Fire-Detection
-Team Flaming Kitty's low expectation no stupid AI buzzword filled Fire Detection code! 🔥🐱
+Team Flaming Kitty's low expectation Fire Detection code! 🔥🐱
 
 ## Table of Contents
 - [What Is This Data?](#what-is-this-data)
