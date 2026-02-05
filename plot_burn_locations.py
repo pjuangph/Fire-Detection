@@ -17,8 +17,8 @@ Usage:
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from mosaic_flight import (
-    group_files_by_flight, compute_grid_extent, build_mosaic, GRID_RES
+from lib import (
+    group_files_by_flight, compute_grid_extent, build_mosaic, GRID_RES,
 )
 
 
@@ -234,22 +234,22 @@ def main():
             print(f'    {os.path.basename(fi)}')
 
         lat_min, lat_max, lon_min, lon_max = compute_grid_extent(files)
-        grid_T4, grid_T11, grid_SWIR, grid_fire, lat_axis, lon_axis, grid_fire_count, grid_obs_count = build_mosaic(
-            files, lat_min, lat_max, lon_min, lon_max, info['day_night'])
+        mosaic = build_mosaic(files, lat_min, lat_max, lon_min, lon_max, info['day_night'])
 
         # Multi-pass stats
-        multi_pass_confirmed = np.sum(grid_fire & (grid_obs_count >= 2))
-        single_pass_only = np.sum(grid_fire & (grid_obs_count < 2))
-        print(f'  Multi-pass filter: {np.sum(grid_fire):,} fire pixels '
+        multi_pass_confirmed = np.sum(mosaic['fire'] & (mosaic['obs_count'] >= 2))
+        single_pass_only = np.sum(mosaic['fire'] & (mosaic['obs_count'] < 2))
+        print(f'  Multi-pass filter: {np.sum(mosaic["fire"]):,} fire pixels '
               f'({multi_pass_confirmed:,} multi-pass, {single_pass_only:,} single-pass)')
 
         # Compute pre-burn FP rate: all detections in pre-burn are false positives
-        preburn_valid = np.sum(np.isfinite(grid_T4))
-        preburn_fire = np.sum(grid_fire)
+        preburn_valid = np.sum(np.isfinite(mosaic['T4']))
+        preburn_fire = np.sum(mosaic['fire'])
         preburn_fp_rate = preburn_fire / max(preburn_valid, 1)
 
         fp_T4, fp_dT = plot_single_flight(
-            grid_T4, grid_T11, grid_SWIR, grid_fire, lat_axis, lon_axis,
+            mosaic['T4'], mosaic['T11'], mosaic['SWIR'], mosaic['fire'],
+            mosaic['lat_axis'], mosaic['lon_axis'],
             pre_fnum, info['comment'], info['day_night'], len(files),
             fp_T4=None, fp_dT=None)
         print(f'  → {len(fp_T4):,} false positive pixels will be shown on all burn flights')
@@ -266,16 +266,16 @@ def main():
             print(f'    {os.path.basename(fi)}')
 
         lat_min, lat_max, lon_min, lon_max = compute_grid_extent(files)
-        grid_T4, grid_T11, grid_SWIR, grid_fire, lat_axis, lon_axis, grid_fire_count, grid_obs_count = build_mosaic(
-            files, lat_min, lat_max, lon_min, lon_max, info['day_night'])
+        mosaic = build_mosaic(files, lat_min, lat_max, lon_min, lon_max, info['day_night'])
 
         # Multi-pass stats
-        multi_pass_confirmed = np.sum(grid_fire & (grid_obs_count >= 2))
-        single_pass_only = np.sum(grid_fire & (grid_obs_count < 2))
-        print(f'  Multi-pass filter: {np.sum(grid_fire):,} fire pixels '
+        multi_pass_confirmed = np.sum(mosaic['fire'] & (mosaic['obs_count'] >= 2))
+        single_pass_only = np.sum(mosaic['fire'] & (mosaic['obs_count'] < 2))
+        print(f'  Multi-pass filter: {np.sum(mosaic["fire"]):,} fire pixels '
               f'({multi_pass_confirmed:,} multi-pass, {single_pass_only:,} single-pass)')
 
-        plot_single_flight(grid_T4, grid_T11, grid_SWIR, grid_fire, lat_axis, lon_axis,
+        plot_single_flight(mosaic['T4'], mosaic['T11'], mosaic['SWIR'], mosaic['fire'],
+                           mosaic['lat_axis'], mosaic['lon_axis'],
                            fnum, info['comment'], info['day_night'], len(files),
                            fp_T4=fp_T4, fp_dT=fp_dT,
                            preburn_fp_rate=preburn_fp_rate)

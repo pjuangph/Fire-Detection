@@ -2,17 +2,19 @@
 
 Trains a small neural network to classify fire vs. non-fire pixels from
 MASTER L1B data using 4 features:
-    - T4:   Brightness temperature at 3.9 μm (fire channel) [K]
-    - T11:  Brightness temperature at 11.25 μm (background channel) [K]
-    - ΔT:   T4 − T11 spectral difference [K]
-    - SWIR: Radiance at 2.16 μm (solar reflection channel) [W/m²/sr/μm]
+
+- T4:   Brightness temperature at 3.9 um (fire channel) [K]
+- T11:  Brightness temperature at 11.25 um (background channel) [K]
+- dT:   T4 - T11 spectral difference [K]
+- SWIR: Radiance at 2.16 um (solar reflection channel) [W/m2/sr/um]
 
 SWIR helps distinguish solar reflection false positives from real fire:
-sun-heated rock reflects strongly in SWIR, while fire emission at 2.16 μm
-is relatively low compared to its 3.9 μm signal.
+sun-heated rock reflects strongly in SWIR, while fire emission at 2.16 um
+is relatively low compared to its 3.9 um signal.
 
-The loss function is Soft Dice Loss:
-    Loss = 1 - 2·TP / (2·TP + FP + FN)
+The loss function is Soft Dice Loss::
+
+    Loss = 1 - 2*TP / (2*TP + FP + FN)
 
 This loss operates on absolute TP/FP/FN counts — total pixel count never
 appears, so it is not diluted by adding more background pixels. Every
@@ -37,7 +39,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from sklearn.linear_model import LogisticRegression
-from mosaic_flight import group_files_by_flight, compute_grid_extent, build_mosaic
+from lib import group_files_by_flight, compute_grid_extent, build_mosaic
 
 
 # ── Data Pipeline ──────────────────────────────────────────────
@@ -58,18 +60,18 @@ def load_flight_data(flights):
         print(f'  Flight {fnum} ({len(files)} files, {day_night})...')
 
         lat_min, lat_max, lon_min, lon_max = compute_grid_extent(files)
-        grid_T4, grid_T11, grid_SWIR, grid_fire, lat_axis, lon_axis, grid_fire_count, grid_obs_count = build_mosaic(
-            files, lat_min, lat_max, lon_min, lon_max, day_night)
-        grid_dT = grid_T4 - grid_T11
+        mosaic = build_mosaic(files, lat_min, lat_max, lon_min, lon_max, day_night)
+        grid_dT = mosaic['T4'] - mosaic['T11']
 
-        valid = np.sum(np.isfinite(grid_T4))
-        fire = np.sum(grid_fire)
+        valid = np.sum(np.isfinite(mosaic['T4']))
+        fire = np.sum(mosaic['fire'])
         print(f'    {valid:,} valid pixels, {fire:,} fire labels')
 
         flight_data[fnum] = {
-            'T4': grid_T4, 'T11': grid_T11, 'SWIR': grid_SWIR, 'dT': grid_dT,
-            'labels': grid_fire.astype(np.float32),
-            'lat_axis': lat_axis, 'lon_axis': lon_axis,
+            'T4': mosaic['T4'], 'T11': mosaic['T11'],
+            'SWIR': mosaic['SWIR'], 'NDVI': mosaic['NDVI'], 'dT': grid_dT,
+            'labels': mosaic['fire'].astype(np.float32),
+            'lat_axis': mosaic['lat_axis'], 'lon_axis': mosaic['lon_axis'],
             'day_night': day_night, 'comment': info['comment'],
         }
     return flight_data

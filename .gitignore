@@ -14,7 +14,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+!lib/
 lib64/
 parts/
 sdist/
@@ -209,3 +209,4 @@ __marimo__/
 # Custom
 ignite_fire_data/
 .DS_Store
+/plots

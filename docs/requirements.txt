@@ -1,7 +1,6 @@
-pyhdf
+sphinx>=7.0
+furo
 numpy
-matplotlib
-torch
-scikit-learn
 pandas
-scipy
+matplotlib
+scikit-learn

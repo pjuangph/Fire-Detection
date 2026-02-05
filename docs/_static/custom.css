@@ -1,0 +1,4 @@
+/* Widen content area for tables and equations */
+.content {
+    max-width: 900px;
+}
