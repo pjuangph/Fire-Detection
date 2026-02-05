@@ -1,3 +1,5 @@
 pyhdf
 numpy
 matplotlib
+torch
+scikit-learn
