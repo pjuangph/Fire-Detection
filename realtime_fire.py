@@ -29,6 +29,7 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 from lib import (
     group_files_by_flight,
     compute_ndvi, init_grid_state, process_sweep, get_fire_mask,
@@ -90,6 +91,16 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
         fire_lons = lon_axis[0] + (lon_axis[-1] - lon_axis[0]) * fire_cols / max(len(lon_axis) - 1, 1)
         ax.scatter(fire_lons, fire_lats, s=1.5, c='red', alpha=0.8, zorder=5)
 
+        # Vegetation-confirmed fire pixels in orange
+        if 'veg_confirmed' in gs:
+            veg_fire = fire_mask & gs['veg_confirmed']
+            veg_count = int(np.sum(veg_fire))
+            if veg_count > 0:
+                vf_rows, vf_cols = np.where(veg_fire)
+                vf_lats = lat_axis[0] + (lat_axis[-1] - lat_axis[0]) * vf_rows / max(len(lat_axis) - 1, 1)
+                vf_lons = lon_axis[0] + (lon_axis[-1] - lon_axis[0]) * vf_cols / max(len(lon_axis) - 1, 1)
+                ax.scatter(vf_lons, vf_lats, s=1.5, c='orange', alpha=0.9, zorder=6)
+
         # Label top fire zones at their centroids
         for zone_id, size in zone_sizes[:10]:
             zone_mask = labels == zone_id
@@ -110,10 +121,15 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
     coverage = 100.0 * np.sum(np.isfinite(gs['T4'])) / (gs['nrows'] * gs['ncols'])
     dn_label = 'NDVI' if has_vnir else 'T4'
 
+    veg_confirmed_count = 0
+    if 'veg_confirmed' in gs:
+        veg_confirmed_count = int(np.sum(fire_mask & gs['veg_confirmed']))
+
     stats_lines = [
         f'Sweep {frame_num}/{n_total} [{dn_label}]',
         f'Coverage: {coverage:.1f}%',
         f'Fire pixels: {fire_count:,}',
+        f'Veg-confirmed: {veg_confirmed_count:,}',
         f'Total fire area: {format_area(total_area)}',
         f'Fire zones: {n_zones}',
     ]
@@ -137,6 +153,15 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
     ax.set_xlabel('Longitude', fontsize=18)
     ax.set_ylabel('Latitude', fontsize=18)
     ax.tick_params(labelsize=14)
+
+    # Legend for fire overlay colors
+    legend_elements = [
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='red',
+               markersize=8, label='Thermal fire'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='orange',
+               markersize=8, label='Veg-confirmed fire'),
+    ]
+    ax.legend(handles=legend_elements, loc='lower right', fontsize=12)
 
     plt.tight_layout()
     outpath = os.path.join(outdir, f'frame_{frame_num:03d}.png')

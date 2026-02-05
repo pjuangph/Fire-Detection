@@ -11,6 +11,8 @@ Team Flaming Kitty's AI Fire Detection code! 🔥🐱
 - [Multi-Pass Consistency Filter](#multi-pass-consistency-filter)
 - [SWIR for False Positive Rejection](#swir-for-false-positive-rejection)
 - [Flight Mosaics](#flight-mosaics)
+- [Vegetation-Loss Fire Confirmation](#vegetation-loss-fire-confirmation)
+- [Real-Time Fire Detection](#real-time-fire-detection)
 - [ML Fire Detection](#ml-fire-detection)
 - [Examples: Fire vs No Fire](#examples-fire-vs-no-fire)
 - [Running the Code](#running-the-code)
@@ -473,6 +475,83 @@ Uses a simplified absolute threshold (no contextual test) for speed:
 4. **Simplified fire detection**: Only absolute threshold test (not contextual anomaly) for processing speed.
 5. **Temporal compositing**: "Last write wins" for T4/T11/SWIR. Fire mask uses multi-pass consistency.
 6. **Day/night classification**: Per-flight, not per-pixel.
+
+---
+
+## Vegetation-Loss Fire Confirmation
+
+### The Idea
+
+Thermal fire detection alone can produce false positives from solar glint, hot rock, or instrument artifacts. If a pixel is truly on fire, the vegetation at that location should be **disappearing** — NDVI drops as plants burn. By tracking NDVI over time, we can independently confirm that a thermal detection is real fire.
+
+### How It Works
+
+1. **NDVI baseline**: The first valid daytime NDVI observation at each pixel is stored as the baseline (typically from a pre-burn flight).
+2. **Vegetation loss detection**: On subsequent sweeps, if a pixel has both a thermal fire detection AND an NDVI drop of ≥ 0.15 from baseline, it is marked as **vegetation-confirmed fire**.
+3. **Burn scar visualization**: At confirmed pixels, the VNIR update rule switches from "keep greenest" to "keep latest", so the NDVI background naturally turns brown as fire consumes vegetation.
+4. **Multi-pass boost**: Vegetation-confirmed fire pixels pass the multi-pass consistency filter even with only 1 thermal detection (since vegetation loss is independent confirmation).
+
+### Threshold
+
+The NDVI drop threshold is 0.15 (absolute, not percentage):
+- Healthy grassland NDVI: 0.3–0.6
+- Burned vegetation NDVI: -0.1 to 0.1
+- Measurement noise from illumination angle changes: ~0.05
+
+A drop of 0.15 is conservative enough to avoid false triggers from atmospheric or angular variation.
+
+### Visualization
+
+In the real-time simulation output:
+- **Red dots**: Thermal-only fire detections
+- **Orange dots**: Vegetation-confirmed fire (thermal + NDVI drop)
+- The stats box shows the count of veg-confirmed pixels
+
+### Requirements
+
+Vegetation-loss confirmation requires:
+- At least one pre-burn daytime flight (to establish NDVI baseline)
+- Grid state persistence across flights (`gs` passed between `simulate_flight()` calls)
+- Daytime observations at fire locations (nighttime NDVI is NaN)
+
+---
+
+## Real-Time Fire Detection
+
+`realtime_fire.py` simulates real-time fire detection as the plane sweeps, processing one flight line at a time and incrementally building a mosaic.
+
+### How It Works
+
+1. The grid starts empty (0×0) and grows dynamically as each sweep arrives
+2. Each sweep's HDF corner attributes determine if the grid needs to expand
+3. Fire detection runs on each sweep; the multi-pass consistency filter updates incrementally
+4. NDVI baseline is tracked for vegetation-loss confirmation
+5. One PNG frame is rendered per sweep showing the current state
+
+### Output
+
+Each flight produces a directory of frames: `plots/realtime_<flight>/frame_001.png`, `frame_002.png`, etc.
+
+To create an animated GIF (requires [ImageMagick](https://imagemagick.org/)):
+```bash
+convert -delay 50 -loop 0 plots/realtime_2480104/frame_*.png plots/realtime_2480104/animation.gif
+```
+
+### What the Operator Sees
+
+- **Green background (NDVI)**: Healthy vegetation during daytime flights
+- **Brown/red areas**: Burn scars where vegetation has been consumed (visible after vegetation-loss confirmation updates the NDVI layer)
+- **Red dots**: Thermal fire detections
+- **Orange dots**: Vegetation-confirmed fire (higher confidence)
+- **Yellow labels**: Fire zone IDs with area in m² or hectares
+- **Stats box**: Sweep count, coverage, fire pixels, veg-confirmed count, zone breakdown
+
+### Dynamic Grid Expansion
+
+Unlike `mosaic_flight.py` which pre-scans all files to determine the grid bounds, `realtime_fire.py` grows the grid dynamically. On each sweep:
+- If the grid is empty, it initializes from that sweep's extent
+- If the sweep extends beyond current bounds, all arrays are expanded and old data is copied at the correct offset
+- This simulates a real-time scenario where the plane doesn't know its future flight path
 
 ---
 

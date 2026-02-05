@@ -11,7 +11,7 @@ from lib.io import (
 from lib.fire import (
     detect_fire_simple, detect_fire, is_daytime, detect_fire_zones,
 )
-from lib.vegetation import compute_ndvi, has_sunlight
+from lib.vegetation import compute_ndvi, has_sunlight, detect_vegetation_loss
 from lib.mosaic import (
     build_mosaic, init_grid_state, process_sweep, get_fire_mask,
 )

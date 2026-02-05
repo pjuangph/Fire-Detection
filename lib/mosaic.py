@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 from pyhdf.SD import SD, SDC
 
-from lib.constants import GRID_RES
+from lib.constants import GRID_RES, VEG_LOSS_THRESHOLD
 from lib.io import process_file
 from lib.fire import detect_fire_simple
 from lib.vegetation import compute_ndvi, has_sunlight
@@ -57,6 +57,16 @@ def _expand_grid(gs: dict[str, Any],
         new_arr = np.zeros((new_nrows, new_ncols), dtype=np.int32)
         new_arr[row_off:row_off + old_nrows, col_off:col_off + old_ncols] = gs[key]
         gs[key] = new_arr
+
+    # Expand NDVI_baseline (NaN-filled)
+    new_bl = np.full((new_nrows, new_ncols), np.nan, dtype=np.float32)
+    new_bl[row_off:row_off + old_nrows, col_off:col_off + old_ncols] = gs['NDVI_baseline']
+    gs['NDVI_baseline'] = new_bl
+
+    # Expand veg_confirmed (False-filled)
+    new_vc = np.zeros((new_nrows, new_ncols), dtype=np.bool_)
+    new_vc[row_off:row_off + old_nrows, col_off:col_off + old_ncols] = gs['veg_confirmed']
+    gs['veg_confirmed'] = new_vc
 
     gs['nrows'] = new_nrows
     gs['ncols'] = new_ncols
@@ -175,6 +185,8 @@ def init_grid_state(lat_min: float | None = None, lat_max: float | None = None,
             'NIR': np.empty((0, 0), dtype=np.float32),
             'fire_count': np.empty((0, 0), dtype=np.int32),
             'obs_count': np.empty((0, 0), dtype=np.int32),
+            'NDVI_baseline': np.empty((0, 0), dtype=np.float32),
+            'veg_confirmed': np.empty((0, 0), dtype=np.bool_),
             'nrows': 0, 'ncols': 0,
             'lat_min': None, 'lat_max': None,
             'lon_min': None, 'lon_max': None,
@@ -193,6 +205,8 @@ def init_grid_state(lat_min: float | None = None, lat_max: float | None = None,
         'NIR': np.full((nrows, ncols), np.nan, dtype=np.float32),
         'fire_count': np.zeros((nrows, ncols), dtype=np.int32),
         'obs_count': np.zeros((nrows, ncols), dtype=np.int32),
+        'NDVI_baseline': np.full((nrows, ncols), np.nan, dtype=np.float32),
+        'veg_confirmed': np.zeros((nrows, ncols), dtype=np.bool_),
         'nrows': nrows, 'ncols': ncols,
         'lat_min': lat_min, 'lat_max': lat_max,
         'lon_min': lon_min, 'lon_max': lon_max,
@@ -271,15 +285,38 @@ def process_sweep(filepath: str, gs: dict[str, Any],
     gs['obs_count'][r, c] += 1
     gs['fire_count'][r, c] += fire[in_bounds].astype(np.int32)
 
-    # VNIR: keep the best-illuminated observation per pixel.
-    # Every sweep contributes; per-pixel NIR comparison decides if applied.
-    # Nighttime sweeps have near-zero NIR so they won't overwrite good
-    # daytime data, but daytime sweeps always improve on nighttime data.
+    # ── Current sweep NDVI ──
+    sweep_ndvi = pf['NDVI'][in_bounds]
+    is_sunlit = np.isfinite(sweep_ndvi)
+
+    # ── Set NDVI baseline (first valid daytime obs, write-once) ──
+    no_baseline = np.isnan(gs['NDVI_baseline'][r, c])
+    gs['NDVI_baseline'][r, c] = np.where(
+        no_baseline & is_sunlit, sweep_ndvi, gs['NDVI_baseline'][r, c])
+
+    # ── Detect vegetation loss at fire pixels ──
+    fire_here = fire[in_bounds]
+    has_baseline = np.isfinite(gs['NDVI_baseline'][r, c])
+    with np.errstate(invalid='ignore'):
+        veg_drop = gs['NDVI_baseline'][r, c] - sweep_ndvi
+        veg_lost = has_baseline & is_sunlit & (veg_drop >= VEG_LOSS_THRESHOLD)
+    newly_confirmed = fire_here & veg_lost
+    gs['veg_confirmed'][r, c] = gs['veg_confirmed'][r, c] | newly_confirmed
+
+    # ── VNIR update: two paths ──
+    # Non-fire pixels: keep best-illuminated (highest NIR)
+    # Veg-confirmed pixels: take latest observation (show burn scar)
     new_nir = pf['NIR'][in_bounds]
+    new_red = pf['Red'][in_bounds]
     old_nir = gs['NIR'][r, c]
-    better = np.isnan(old_nir) | (new_nir > old_nir)
-    gs['Red'][r, c] = np.where(better, pf['Red'][in_bounds], gs['Red'][r, c])
-    gs['NIR'][r, c] = np.where(better, new_nir, old_nir)
+    old_red = gs['Red'][r, c]
+
+    best_illuminated = np.isnan(old_nir) | (new_nir > old_nir)
+    take_latest = gs['veg_confirmed'][r, c]
+    use_new = best_illuminated | take_latest
+
+    gs['Red'][r, c] = np.where(use_new, new_red, old_red)
+    gs['NIR'][r, c] = np.where(use_new, new_nir, old_nir)
 
     # Use per-pixel NDVI where sunlight exists; nighttime pixels stay NaN
     NDVI = pf['NDVI']
@@ -300,10 +337,18 @@ def process_sweep(filepath: str, gs: dict[str, Any],
 
 
 def get_fire_mask(gs: dict[str, Any]) -> np.ndarray:
-    """Apply multi-pass consistency filter to current grid state."""
+    """Apply multi-pass consistency filter with vegetation confirmation.
+
+    Standard rule: pixels observed >=2 times need fire in >=2 passes.
+    Override: pixels with veg_confirmed=True are treated as fire even
+    with only 1 thermal fire detection (vegetation loss is independent
+    confirmation that the thermal signal was real fire).
+    """
     multi_pass = gs['obs_count'] >= 2
-    return np.where(
+    standard_fire = np.where(
         multi_pass,
         gs['fire_count'] >= 2,
         gs['fire_count'] >= 1,
     )
+    veg_boost = gs['veg_confirmed'] & (gs['fire_count'] >= 1)
+    return standard_fire | veg_boost

@@ -15,3 +15,10 @@ CH_NIR  = 8    # Ch 9:  nominal wavelength 0.866 μm, VNIR NIR band (for NDVI)
 # Grid resolution: 0.00025 degrees ≈ 28 m at 36°N latitude.
 # Native MASTER pixel spacing is ~8 m; this is ~3× downsampled for speed.
 GRID_RES = 0.00025  # [degrees]
+
+# Vegetation loss threshold for fire confirmation [NDVI units].
+# NDVI drop >= 0.15 from baseline indicates burned vegetation.
+# Healthy grassland NDVI: 0.3–0.6; burned: -0.1 to 0.1.
+# 0.15 is conservative enough to avoid false positives from
+# illumination angle changes (~0.05 NDVI noise).
+VEG_LOSS_THRESHOLD = 0.15

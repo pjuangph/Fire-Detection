@@ -119,7 +119,10 @@ Fire Overlay Colors
 
 - **Red dots**: Fire detections that passed the absolute temperature
   threshold (T4 > 325 K daytime, 310 K nighttime).
-- **Orange dots** (in ``detect_fire.py`` only): Contextual anomaly
+- **Orange dots** (in ``realtime_fire.py``): **Vegetation-confirmed
+  fire** -- pixels where thermal fire is independently confirmed by
+  NDVI drop (vegetation loss). Higher confidence than red-only.
+- **Orange dots** (in ``detect_fire.py``): Contextual anomaly
   detections -- pixels that are anomalously warm relative to their
   neighbors but below the absolute threshold.
 
@@ -148,6 +151,8 @@ The ``realtime_fire.py`` output includes a stats box showing:
 - **Sweep N/M [NDVI or T4]**: Current sweep number and background type.
 - **Coverage**: Percentage of grid cells with data so far.
 - **Fire pixels**: Total confirmed fire pixels (after multi-pass filter).
+- **Veg-confirmed**: Fire pixels independently confirmed by vegetation
+  loss (NDVI drop from baseline). These are shown as orange dots.
 - **Total fire area**: Estimated area in m\ :sup:`2` or hectares.
 - **Fire zones**: Number of spatially connected fire regions.
 - **Zone breakdown**: Top 5 zones by size with individual areas.

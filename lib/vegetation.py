@@ -53,3 +53,26 @@ def has_sunlight(red: np.ndarray, nir: np.ndarray, threshold: float = 5.0) -> bo
     if len(valid_nir) == 0:
         return False
     return float(np.median(valid_nir)) > threshold
+
+
+def detect_vegetation_loss(baseline: np.ndarray, current: np.ndarray,
+                           threshold: float = 0.15) -> np.ndarray:
+    """Detect significant vegetation loss by comparing NDVI to baseline.
+
+    A drop of >= threshold from the first-observed NDVI indicates that
+    vegetation has been consumed (e.g. by fire). Uses absolute drop,
+    not percentage, because a 0.15 drop is physically meaningful
+    regardless of the baseline magnitude.
+
+    Args:
+        baseline: NDVI baseline array (first valid daytime observation).
+        current: Current NDVI array (same shape as baseline).
+        threshold: Minimum NDVI drop to flag as vegetation loss.
+
+    Returns:
+        Boolean mask, True where baseline - current >= threshold and
+        both values are finite.
+    """
+    with np.errstate(invalid='ignore'):
+        drop = baseline - current
+        return np.isfinite(drop) & (drop >= threshold)
