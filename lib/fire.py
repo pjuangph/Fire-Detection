@@ -1,10 +1,16 @@
 """Fire detection algorithms: threshold, contextual, and zone analysis."""
 
+from __future__ import annotations
+
+from typing import Any
+
 import numpy as np
 from scipy.ndimage import label as ndimage_label
 
 
-def detect_fire_simple(T4, T11, T4_thresh=325.0, dT_thresh=10.0):
+def detect_fire_simple(T4: np.ndarray, T11: np.ndarray,
+                       T4_thresh: float = 325.0,
+                       dT_thresh: float = 10.0) -> np.ndarray:
     """Simple absolute fire detection (no contextual test, for speed on mosaics).
 
     Args:
@@ -18,7 +24,7 @@ def detect_fire_simple(T4, T11, T4_thresh=325.0, dT_thresh=10.0):
     return (T4 > T4_thresh) & (dT > dT_thresh)
 
 
-def is_daytime(solar_zenith, threshold=85.0):
+def is_daytime(solar_zenith: np.ndarray, threshold: float = 85.0) -> np.ndarray:
     """Return boolean mask: True where pixel is daytime (SZA < threshold).
 
     Args:
@@ -28,7 +34,8 @@ def is_daytime(solar_zenith, threshold=85.0):
     return solar_zenith < threshold
 
 
-def _contextual_stats(arr, window=61):
+def _contextual_stats(arr: np.ndarray,
+                      window: int = 61) -> tuple[np.ndarray, np.ndarray]:
     """Compute NaN-aware local mean and std using a cumulative-sum box filter.
 
     Args:
@@ -77,12 +84,12 @@ def _contextual_stats(arr, window=61):
     return local_mean, local_std
 
 
-def detect_fire(T4, T11, daytime,
-                T4_day_thresh=325.0,
-                T4_night_thresh=310.0,
-                delta_T_thresh=10.0,
-                context_window=61,
-                context_sigma=3.0):
+def detect_fire(T4: np.ndarray, T11: np.ndarray, daytime: np.ndarray,
+                T4_day_thresh: float = 325.0,
+                T4_night_thresh: float = 310.0,
+                delta_T_thresh: float = 10.0,
+                context_window: int = 61,
+                context_sigma: float = 3.0) -> dict[str, Any]:
     """Run fire detection on a MASTER scene with contextual anomaly test.
 
     Args:
@@ -124,7 +131,7 @@ def detect_fire(T4, T11, daytime,
     }
 
 
-def detect_fire_zones(fire_mask):
+def detect_fire_zones(fire_mask: np.ndarray) -> tuple[np.ndarray, int, list[tuple[int, int]]]:
     """Find connected fire zones using 8-connectivity.
 
     Returns:

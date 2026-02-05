@@ -1,15 +1,88 @@
 """Mosaic gridding: build flight mosaics, incremental sweep processing."""
 
-import os
-import numpy as np
+from __future__ import annotations
 
-from lib.constants import GRID_RES
+import os
+from typing import Any
+
+import numpy as np
+from pyhdf.SD import SD, SDC
+
+from lib.constants import GRID_RES, VEG_LOSS_THRESHOLD
 from lib.io import process_file
 from lib.fire import detect_fire_simple
 from lib.vegetation import compute_ndvi, has_sunlight
 
 
-def build_mosaic(files, lat_min, lat_max, lon_min, lon_max, day_night='D'):
+def _file_extent(filepath: str) -> tuple[float, float, float, float]:
+    """Get lat/lon bounding box of a single HDF file from corner attributes.
+
+    Returns:
+        (lat_min, lat_max, lon_min, lon_max) with 0.005° buffer.
+    """
+    sd = SD(filepath, SDC.READ)
+    attrs = sd.attributes()
+    lat_min = min(attrs['lat_LL'], attrs['lat_UL'])
+    lat_max = max(attrs['lat_LR'], attrs['lat_UR'])
+    lon_min = min(attrs['lon_UL'], attrs['lon_UR'])
+    lon_max = max(attrs['lon_LL'], attrs['lon_LR'])
+    sd.end()
+    buf = 0.005
+    return lat_min - buf, lat_max + buf, lon_min - buf, lon_max + buf
+
+
+def _expand_grid(gs: dict[str, Any],
+                 new_lat_min: float, new_lat_max: float,
+                 new_lon_min: float, new_lon_max: float) -> None:
+    """Expand all grid arrays in-place to cover new bounds.
+
+    Allocates larger arrays and copies old data at the correct offset.
+    """
+    old_nrows, old_ncols = gs['nrows'], gs['ncols']
+    new_nrows = int(np.ceil((new_lat_max - new_lat_min) / GRID_RES))
+    new_ncols = int(np.ceil((new_lon_max - new_lon_min) / GRID_RES))
+
+    # Offset of old grid within new grid
+    row_off = round((new_lat_max - gs['lat_max']) / GRID_RES)
+    col_off = round((gs['lon_min'] - new_lon_min) / GRID_RES)
+
+    # Expand float arrays (NaN-filled)
+    for key in ('T4', 'T11', 'SWIR', 'Red', 'NIR'):
+        new_arr = np.full((new_nrows, new_ncols), np.nan, dtype=np.float32)
+        new_arr[row_off:row_off + old_nrows, col_off:col_off + old_ncols] = gs[key]
+        gs[key] = new_arr
+
+    # Expand int arrays (zero-filled)
+    for key in ('fire_count', 'obs_count'):
+        new_arr = np.zeros((new_nrows, new_ncols), dtype=np.int32)
+        new_arr[row_off:row_off + old_nrows, col_off:col_off + old_ncols] = gs[key]
+        gs[key] = new_arr
+
+    # Expand NDVI_baseline (NaN-filled)
+    new_bl = np.full((new_nrows, new_ncols), np.nan, dtype=np.float32)
+    new_bl[row_off:row_off + old_nrows, col_off:col_off + old_ncols] = gs['NDVI_baseline']
+    gs['NDVI_baseline'] = new_bl
+
+    # Expand veg_confirmed (False-filled)
+    new_vc = np.zeros((new_nrows, new_ncols), dtype=np.bool_)
+    new_vc[row_off:row_off + old_nrows, col_off:col_off + old_ncols] = gs['veg_confirmed']
+    gs['veg_confirmed'] = new_vc
+
+    gs['nrows'] = new_nrows
+    gs['ncols'] = new_ncols
+    gs['lat_min'] = new_lat_min
+    gs['lat_max'] = new_lat_max
+    gs['lon_min'] = new_lon_min
+    gs['lon_max'] = new_lon_max
+    gs['lat_axis'] = np.linspace(new_lat_max, new_lat_min, new_nrows)
+    gs['lon_axis'] = np.linspace(new_lon_min, new_lon_max, new_ncols)
+
+    print(f'  Grid expanded: {old_nrows}x{old_ncols} -> {new_nrows}x{new_ncols}')
+
+
+def build_mosaic(files: list[str], lat_min: float, lat_max: float,
+                 lon_min: float, lon_max: float,
+                 day_night: str = 'D') -> dict[str, Any]:
     """Build a gridded mosaic from a list of flight line files.
 
     Files are processed in order (chronological), so later lines overwrite earlier
@@ -96,8 +169,31 @@ def build_mosaic(files, lat_min, lat_max, lon_min, lon_max, day_night='D'):
     }
 
 
-def init_grid_state(lat_min, lat_max, lon_min, lon_max):
-    """Initialize empty grid state for incremental mosaic building."""
+def init_grid_state(lat_min: float | None = None, lat_max: float | None = None,
+                    lon_min: float | None = None, lon_max: float | None = None) -> dict[str, Any]:
+    """Initialize empty grid state for incremental mosaic building.
+
+    When called with no arguments, returns an empty sentinel grid (0x0)
+    that will be populated on the first call to process_sweep().
+    """
+    if lat_min is None:
+        return {
+            'T4': np.empty((0, 0), dtype=np.float32),
+            'T11': np.empty((0, 0), dtype=np.float32),
+            'SWIR': np.empty((0, 0), dtype=np.float32),
+            'Red': np.empty((0, 0), dtype=np.float32),
+            'NIR': np.empty((0, 0), dtype=np.float32),
+            'fire_count': np.empty((0, 0), dtype=np.int32),
+            'obs_count': np.empty((0, 0), dtype=np.int32),
+            'NDVI_baseline': np.empty((0, 0), dtype=np.float32),
+            'veg_confirmed': np.empty((0, 0), dtype=np.bool_),
+            'nrows': 0, 'ncols': 0,
+            'lat_min': None, 'lat_max': None,
+            'lon_min': None, 'lon_max': None,
+            'lat_axis': np.array([]), 'lon_axis': np.array([]),
+        }
+
+    assert lat_max is not None and lon_min is not None and lon_max is not None
     nrows = int(np.ceil((lat_max - lat_min) / GRID_RES))
     ncols = int(np.ceil((lon_max - lon_min) / GRID_RES))
 
@@ -109,6 +205,8 @@ def init_grid_state(lat_min, lat_max, lon_min, lon_max):
         'NIR': np.full((nrows, ncols), np.nan, dtype=np.float32),
         'fire_count': np.zeros((nrows, ncols), dtype=np.int32),
         'obs_count': np.zeros((nrows, ncols), dtype=np.int32),
+        'NDVI_baseline': np.full((nrows, ncols), np.nan, dtype=np.float32),
+        'veg_confirmed': np.zeros((nrows, ncols), dtype=np.bool_),
         'nrows': nrows, 'ncols': ncols,
         'lat_min': lat_min, 'lat_max': lat_max,
         'lon_min': lon_min, 'lon_max': lon_max,
@@ -117,7 +215,10 @@ def init_grid_state(lat_min, lat_max, lon_min, lon_max):
     }
 
 
-def process_sweep(filepath, gs, pixel_rows, day_night='auto', flight_num=''):
+def process_sweep(filepath: str, gs: dict[str, Any],
+                  pixel_rows: list[dict[str, Any]],
+                  day_night: str = 'auto',
+                  flight_num: str = '') -> tuple[int, str]:
     """Process one sweep file and update grid state in-place.
 
     Also appends per-pixel data to pixel_rows list for DataFrame
@@ -134,6 +235,27 @@ def process_sweep(filepath, gs, pixel_rows, day_night='auto', flight_num=''):
     Returns:
         (n_new_fire, day_night): fire pixel count and detected day/night flag.
     """
+    # Get this file's extent and init/expand grid as needed
+    file_lat_min, file_lat_max, file_lon_min, file_lon_max = _file_extent(filepath)
+
+    if gs['nrows'] == 0:
+        # First sweep: initialize grid from this file's extent
+        gs.update(init_grid_state(file_lat_min, file_lat_max,
+                                  file_lon_min, file_lon_max))
+    else:
+        need_expand = (
+            file_lat_min < gs['lat_min'] or file_lat_max > gs['lat_max'] or
+            file_lon_min < gs['lon_min'] or file_lon_max > gs['lon_max']
+        )
+        if need_expand:
+            _expand_grid(
+                gs,
+                min(gs['lat_min'], file_lat_min),
+                max(gs['lat_max'], file_lat_max),
+                min(gs['lon_min'], file_lon_min),
+                max(gs['lon_max'], file_lon_max),
+            )
+
     pf = process_file(filepath)
     T4, T11, SWIR = pf['T4'], pf['T11'], pf['SWIR']
     lat, lon = pf['lat'], pf['lon']
@@ -163,15 +285,38 @@ def process_sweep(filepath, gs, pixel_rows, day_night='auto', flight_num=''):
     gs['obs_count'][r, c] += 1
     gs['fire_count'][r, c] += fire[in_bounds].astype(np.int32)
 
-    # VNIR: keep the best-illuminated observation per pixel.
-    # Every sweep contributes; per-pixel NIR comparison decides if applied.
-    # Nighttime sweeps have near-zero NIR so they won't overwrite good
-    # daytime data, but daytime sweeps always improve on nighttime data.
+    # ── Current sweep NDVI ──
+    sweep_ndvi = pf['NDVI'][in_bounds]
+    is_sunlit = np.isfinite(sweep_ndvi)
+
+    # ── Set NDVI baseline (first valid daytime obs, write-once) ──
+    no_baseline = np.isnan(gs['NDVI_baseline'][r, c])
+    gs['NDVI_baseline'][r, c] = np.where(
+        no_baseline & is_sunlit, sweep_ndvi, gs['NDVI_baseline'][r, c])
+
+    # ── Detect vegetation loss at fire pixels ──
+    fire_here = fire[in_bounds]
+    has_baseline = np.isfinite(gs['NDVI_baseline'][r, c])
+    with np.errstate(invalid='ignore'):
+        veg_drop = gs['NDVI_baseline'][r, c] - sweep_ndvi
+        veg_lost = has_baseline & is_sunlit & (veg_drop >= VEG_LOSS_THRESHOLD)
+    newly_confirmed = fire_here & veg_lost
+    gs['veg_confirmed'][r, c] = gs['veg_confirmed'][r, c] | newly_confirmed
+
+    # ── VNIR update: two paths ──
+    # Non-fire pixels: keep best-illuminated (highest NIR)
+    # Veg-confirmed pixels: take latest observation (show burn scar)
     new_nir = pf['NIR'][in_bounds]
+    new_red = pf['Red'][in_bounds]
     old_nir = gs['NIR'][r, c]
-    better = np.isnan(old_nir) | (new_nir > old_nir)
-    gs['Red'][r, c] = np.where(better, pf['Red'][in_bounds], gs['Red'][r, c])
-    gs['NIR'][r, c] = np.where(better, new_nir, old_nir)
+    old_red = gs['Red'][r, c]
+
+    best_illuminated = np.isnan(old_nir) | (new_nir > old_nir)
+    take_latest = gs['veg_confirmed'][r, c]
+    use_new = best_illuminated | take_latest
+
+    gs['Red'][r, c] = np.where(use_new, new_red, old_red)
+    gs['NIR'][r, c] = np.where(use_new, new_nir, old_nir)
 
     # Use per-pixel NDVI where sunlight exists; nighttime pixels stay NaN
     NDVI = pf['NDVI']
@@ -191,11 +336,19 @@ def process_sweep(filepath, gs, pixel_rows, day_night='auto', flight_num=''):
     return int(fire[in_bounds].sum()), day_night
 
 
-def get_fire_mask(gs):
-    """Apply multi-pass consistency filter to current grid state."""
+def get_fire_mask(gs: dict[str, Any]) -> np.ndarray:
+    """Apply multi-pass consistency filter with vegetation confirmation.
+
+    Standard rule: pixels observed >=2 times need fire in >=2 passes.
+    Override: pixels with veg_confirmed=True are treated as fire even
+    with only 1 thermal fire detection (vegetation loss is independent
+    confirmation that the thermal signal was real fire).
+    """
     multi_pass = gs['obs_count'] >= 2
-    return np.where(
+    standard_fire = np.where(
         multi_pass,
         gs['fire_count'] >= 2,
         gs['fire_count'] >= 1,
     )
+    veg_boost = gs['veg_confirmed'] & (gs['fire_count'] >= 1)
+    return standard_fire | veg_boost

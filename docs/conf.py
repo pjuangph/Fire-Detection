@@ -29,7 +29,7 @@ autodoc_member_order = 'bysource'
 autodoc_typehints = 'description'
 
 # Mock heavy/system-dependent imports for CI builds
-autodoc_mock_imports = ['pyhdf', 'torch', 'scipy', 'sklearn']
+autodoc_mock_imports = ['pyhdf', 'torch', 'scipy', 'sklearn', 'earthaccess']
 
 # Intersphinx: link to external docs
 intersphinx_mapping = {

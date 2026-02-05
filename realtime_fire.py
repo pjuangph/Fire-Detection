@@ -20,13 +20,18 @@ Usage:
     python realtime_fire.py           # all flights
 """
 
+from __future__ import annotations
+
 import os
+from typing import Any, Dict
+
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 from lib import (
-    group_files_by_flight, compute_grid_extent,
+    group_files_by_flight,
     compute_ndvi, init_grid_state, process_sweep, get_fire_mask,
     detect_fire_zones, compute_cell_area_m2, format_area,
 )
@@ -35,8 +40,10 @@ from lib import (
 # ── Rendering ─────────────────────────────────────────────────
 
 
-def render_frame(gs, fire_mask, frame_num, n_total,
-                 flight_num, comment, outdir, cell_area_m2):
+def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
+                 frame_num: int, n_total: int,
+                 flight_num: str, comment: str,
+                 outdir: str, cell_area_m2: float) -> str:
     """Render one frame of the real-time simulation as a PNG.
 
     Background layer is chosen by checking if the grid has accumulated
@@ -49,7 +56,7 @@ def render_frame(gs, fire_mask, frame_num, n_total,
     has_vnir = np.any(np.isfinite(gs['NIR']))
     lat_axis = gs['lat_axis']
     lon_axis = gs['lon_axis']
-    extent = [lon_axis[0], lon_axis[-1], lat_axis[-1], lat_axis[0]]
+    extent = (lon_axis[0], lon_axis[-1], lat_axis[-1], lat_axis[0])
 
     fig, ax = plt.subplots(figsize=(16, 14))
 
@@ -84,6 +91,16 @@ def render_frame(gs, fire_mask, frame_num, n_total,
         fire_lons = lon_axis[0] + (lon_axis[-1] - lon_axis[0]) * fire_cols / max(len(lon_axis) - 1, 1)
         ax.scatter(fire_lons, fire_lats, s=1.5, c='red', alpha=0.8, zorder=5)
 
+        # Vegetation-confirmed fire pixels in orange
+        if 'veg_confirmed' in gs:
+            veg_fire = fire_mask & gs['veg_confirmed']
+            veg_count = int(np.sum(veg_fire))
+            if veg_count > 0:
+                vf_rows, vf_cols = np.where(veg_fire)
+                vf_lats = lat_axis[0] + (lat_axis[-1] - lat_axis[0]) * vf_rows / max(len(lat_axis) - 1, 1)
+                vf_lons = lon_axis[0] + (lon_axis[-1] - lon_axis[0]) * vf_cols / max(len(lon_axis) - 1, 1)
+                ax.scatter(vf_lons, vf_lats, s=1.5, c='orange', alpha=0.9, zorder=6)
+
         # Label top fire zones at their centroids
         for zone_id, size in zone_sizes[:10]:
             zone_mask = labels == zone_id
@@ -104,10 +121,15 @@ def render_frame(gs, fire_mask, frame_num, n_total,
     coverage = 100.0 * np.sum(np.isfinite(gs['T4'])) / (gs['nrows'] * gs['ncols'])
     dn_label = 'NDVI' if has_vnir else 'T4'
 
+    veg_confirmed_count = 0
+    if 'veg_confirmed' in gs:
+        veg_confirmed_count = int(np.sum(fire_mask & gs['veg_confirmed']))
+
     stats_lines = [
         f'Sweep {frame_num}/{n_total} [{dn_label}]',
         f'Coverage: {coverage:.1f}%',
         f'Fire pixels: {fire_count:,}',
+        f'Veg-confirmed: {veg_confirmed_count:,}',
         f'Total fire area: {format_area(total_area)}',
         f'Fire zones: {n_zones}',
     ]
@@ -132,6 +154,15 @@ def render_frame(gs, fire_mask, frame_num, n_total,
     ax.set_ylabel('Latitude', fontsize=18)
     ax.tick_params(labelsize=14)
 
+    # Legend for fire overlay colors
+    legend_elements = [
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='red',
+               markersize=8, label='Thermal fire'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='orange',
+               markersize=8, label='Veg-confirmed fire'),
+    ]
+    ax.legend(handles=legend_elements, loc='lower right', fontsize=12)
+
     plt.tight_layout()
     outpath = os.path.join(outdir, f'frame_{frame_num:03d}.png')
     plt.savefig(outpath, dpi=150, bbox_inches='tight')
@@ -143,7 +174,8 @@ def render_frame(gs, fire_mask, frame_num, n_total,
 # ── Simulation ────────────────────────────────────────────────
 
 
-def simulate_flight(flight_num, files, comment):
+def simulate_flight(flight_num: str, files: list[str],
+                    comment: str, gs: Dict[str,Any]) -> None:
     """Simulate real-time fire detection for one flight.
 
     Day/night is auto-detected per sweep from VNIR radiance.
@@ -152,6 +184,7 @@ def simulate_flight(flight_num, files, comment):
         flight_num: flight identifier (e.g. '24-801-04').
         files: list of HDF file paths for this flight.
         comment: flight comment from HDF metadata.
+        gs (Dict[str,Any]): Dictionary of data that is updated by process_sweep
     """
     print('=' * 60)
     print(f'Real-Time Fire Detection Simulation')
@@ -159,25 +192,27 @@ def simulate_flight(flight_num, files, comment):
     print(f'{len(files)} sweeps (day/night auto-detected per sweep)')
     print('=' * 60)
 
-    # Compute grid extent for the full flight
-    lat_min, lat_max, lon_min, lon_max = compute_grid_extent(files)
-    gs = init_grid_state(lat_min, lat_max, lon_min, lon_max)
-
-    lat_center = (lat_min + lat_max) / 2
-    cell_area = compute_cell_area_m2(lat_center)
-    print(f'Grid: {gs["nrows"]} x {gs["ncols"]}, cell area: {cell_area:.0f} m\u00b2')
-
+    
     outdir = f'plots/realtime_{flight_num.replace("-", "")}'
     os.makedirs(outdir, exist_ok=True)
 
     print(f'\nSimulating {len(files)} sweeps \u2192 {outdir}/\n')
 
     pixel_rows = []
+    cell_area = 0.0
 
     for i, filepath in enumerate(files):
         name = os.path.basename(filepath)
         n_new_fire, detected_dn = process_sweep(
             filepath, gs, pixel_rows, day_night='auto', flight_num=flight_num)
+
+        # Recompute cell area from current grid center (updates after expansion)
+        lat_center = (gs['lat_min'] + gs['lat_max']) / 2
+        cell_area = compute_cell_area_m2(lat_center)
+
+        if i == 0:
+            print(f'Initial grid: {gs["nrows"]} x {gs["ncols"]}, '
+                  f'cell area: {cell_area:.0f} m\u00b2')
 
         fire_mask = get_fire_mask(gs)
         fire_total = int(np.sum(fire_mask))
@@ -211,18 +246,16 @@ def simulate_flight(flight_num, files, comment):
     print(f'    convert -delay 50 -loop 0 '
           f'{outdir}/frame_*.png {outdir}/animation.gif')
 
-
-def main():
+def main() -> None:
     flights = group_files_by_flight()
+    gs = init_grid_state()  # empty, grows dynamically per sweep
 
     print(f'Scanned {len(flights)} flights:')
     for fnum, info in sorted(flights.items()):
         print(f'  {fnum}: {len(info["files"])} lines — {info["comment"]}')
     print()
-
     for fnum, info in sorted(flights.items()):
-        simulate_flight(fnum, info['files'], info['comment'])
-        print()
+        simulate_flight(fnum, info['files'], info['comment'], gs)
 
     print('All simulations complete.')
 

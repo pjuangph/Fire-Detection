@@ -1,7 +1,11 @@
 """HDF file I/O: reading MASTER L1B data, grouping by flight, coordinate extents."""
 
+from __future__ import annotations
+
 import glob
 import os
+from typing import Any
+
 import numpy as np
 from pyhdf.SD import SD, SDC
 
@@ -12,7 +16,7 @@ from lib.constants import (
 from lib.vegetation import compute_ndvi
 
 
-def radiance_to_bt(radiance_um, wavelength_um):
+def radiance_to_bt(radiance_um: np.ndarray, wavelength_um: float) -> np.ndarray:
     """Convert spectral radiance to brightness temperature via inverse Planck.
 
     Args:
@@ -32,7 +36,7 @@ def radiance_to_bt(radiance_um, wavelength_um):
     return T
 
 
-def process_file(filepath):
+def process_file(filepath: str) -> dict[str, np.ndarray]:
     """Load one HDF4 file and return per-pixel data as a dict.
 
     Returns dict with keys:
@@ -94,7 +98,7 @@ def process_file(filepath):
     }
 
 
-def group_files_by_flight():
+def group_files_by_flight() -> dict[str, dict[str, Any]]:
     """Group HDF files by flight number, sorted by start time within each flight."""
     files = sorted(glob.glob('ignite_fire_data/*.hdf'))
     flights = {}
@@ -111,7 +115,7 @@ def group_files_by_flight():
     return flights
 
 
-def compute_grid_extent(files):
+def compute_grid_extent(files: list[str]) -> tuple[float, float, float, float]:
     """Compute the lat/lon bounding box across all files in a flight."""
     lat_min, lat_max = 90.0, -90.0
     lon_min, lon_max = 180.0, -180.0

@@ -372,7 +372,45 @@ See :func:`lib.vegetation.has_sunlight`.
 Vegetation Mapping (NDVI)
 -------------------------
 
-NDVI (Normalized Difference Vegetation Index):
+**What is NDVI?**
+
+NDVI (Normalized Difference Vegetation Index) measures how green and
+healthy vegetation is. It exploits a fundamental property of plant
+leaves: chlorophyll **absorbs** red light (for photosynthesis) but
+**reflects** near-infrared (NIR) light. Healthy vegetation is therefore
+dark in red and bright in NIR, producing a high NDVI. Bare soil, rock,
+and burned surfaces reflect red and NIR similarly, producing NDVI near
+zero.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 20 50
+
+   * - Surface
+     - NDVI range
+     - Interpretation
+   * - Dense healthy vegetation
+     - 0.6 -- 0.9
+     - High chlorophyll, strong NIR reflection
+   * - Sparse/stressed vegetation
+     - 0.2 -- 0.5
+     - Partial ground exposure
+   * - Bare soil / rock
+     - 0.0 -- 0.2
+     - No chlorophyll signal
+   * - Burned vegetation
+     - -0.1 -- 0.1
+     - Charred material, no photosynthetic activity
+   * - Water / cloud shadow
+     - -0.3 -- 0.0
+     - Water absorbs NIR more than red
+
+**Why NDVI matters for fire detection:** When vegetation burns, NDVI
+drops from its pre-fire baseline (e.g., 0.4 for grassland) to near
+zero. This NDVI drop is an independent confirmation signal for thermal
+fire detections -- see `Vegetation-Loss Fire Confirmation`_ below.
+
+**Formula:**
 
 .. math::
 
@@ -408,6 +446,95 @@ decides whether the update is applied -- nighttime sweeps have
 near-zero NIR and will not overwrite good daytime data.
 
 See :func:`lib.mosaic.process_sweep`, :func:`lib.vegetation.compute_ndvi`.
+
+
+Vegetation-Loss Fire Confirmation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Thermal fire detection can produce false positives from solar glint, hot
+rock, or instrument artifacts. **Vegetation-loss confirmation** adds an
+independent signal: if a pixel is truly on fire, its NDVI should drop as
+plants burn.
+
+**NDVI baseline tracking:**
+
+The first valid daytime NDVI observation at each pixel is stored as the
+baseline (``NDVI_baseline`` in grid state). This is typically set during
+a pre-burn flight and never overwritten.
+
+**Vegetation loss detection:**
+
+On each subsequent daytime sweep, pixels with both a thermal fire
+detection AND an NDVI drop from baseline are marked as
+vegetation-confirmed:
+
+.. math::
+
+   \text{veg\_confirmed} = \text{fire} \;\wedge\;
+   (\text{NDVI}_\text{baseline} - \text{NDVI}_\text{current} \geq 0.15)
+
+**Threshold justification:**
+
+.. list-table::
+   :widths: 30 30 40
+
+   * - Condition
+     - Typical NDVI
+     - Notes
+   * - Healthy grassland
+     - 0.3 -- 0.6
+     - Pre-burn baseline
+   * - Burned vegetation
+     - -0.1 -- 0.1
+     - Post-fire
+   * - Measurement noise
+     - +/- 0.05
+     - From illumination angle changes
+
+A threshold of 0.15 is conservative enough to avoid false triggers from
+atmospheric or angular variation while capturing real vegetation loss.
+
+**Integration with multi-pass filter:**
+
+Vegetation-confirmed pixels are treated as fire even with only 1 thermal
+detection (the standard multi-pass rule requires 2 detections for
+multi-observed pixels). Vegetation loss is independent confirmation that
+the thermal signal was real fire, not an angle-dependent artifact.
+
+**Burn scar visualization:**
+
+At vegetation-confirmed pixels, the VNIR update rule changes from
+"keep best illuminated" (highest NIR) to "keep latest observation".
+This allows the NDVI background to naturally transition from green
+to brown as fire consumes vegetation, making burn scars visible in the
+render.
+
+**Requirements:**
+
+- At least one pre-burn daytime flight (to establish baseline)
+- Grid state persistence across flights
+- Daytime observations at fire locations (nighttime NDVI is NaN)
+
+See :func:`lib.vegetation.detect_vegetation_loss`,
+:func:`lib.mosaic.process_sweep`, :func:`lib.mosaic.get_fire_mask`.
+
+
+Dynamic Grid Expansion
+^^^^^^^^^^^^^^^^^^^^^^
+
+In real-time mode, the grid starts empty and grows dynamically as each
+sweep arrives. On each call to :func:`lib.mosaic.process_sweep`:
+
+1. The file's bounding box is read from HDF corner attributes
+2. If the grid is empty (first sweep), it initializes from that extent
+3. If the file extends beyond current bounds, all arrays are expanded
+
+Expansion allocates larger arrays (NaN-filled for floats, zero-filled
+for counters, False-filled for booleans) and copies old data at the
+correct row/column offset. This avoids pre-scanning all files, which
+would not be possible in a true real-time scenario.
+
+See :func:`lib.mosaic.init_grid_state`.
 
 
 Mosaic Gridding
