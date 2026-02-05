@@ -1,5 +1,5 @@
 # Fire-Detection
-Team Flaming Kitty's AI Fire Detection code! 🔥🐱
+Team Flaming Kitty's low expectation probably not going to be buzzword filled AI Fire Detection code! 🔥🐱
 
 ## Table of Contents
 - [What Is This Data?](#what-is-this-data)
