@@ -39,12 +39,14 @@ def render_frame(gs, fire_mask, frame_num, n_total,
                  flight_num, comment, outdir, cell_area_m2):
     """Render one frame of the real-time simulation as a PNG.
 
-    Day/night is read from gs['day_night'], set by process_sweep()
-    auto-detection.
+    Background layer is chosen by checking if the grid has accumulated
+    usable VNIR data (any finite NIR pixels), not by the last sweep's
+    day/night flag. This way, daytime VNIR data persists even after
+    nighttime sweeps are processed.
     """
     plt.rcParams.update({'font.size': 18})
 
-    day_night = gs.get('day_night', 'D')
+    has_vnir = np.any(np.isfinite(gs['NIR']))
     lat_axis = gs['lat_axis']
     lon_axis = gs['lon_axis']
     extent = [lon_axis[0], lon_axis[-1], lat_axis[-1], lat_axis[0]]
@@ -52,7 +54,7 @@ def render_frame(gs, fire_mask, frame_num, n_total,
     fig, ax = plt.subplots(figsize=(16, 14))
 
     # --- Background layer ---
-    if day_night != 'N':
+    if has_vnir:
         display_ndvi = compute_ndvi(gs['Red'], gs['NIR'])
         bg = ax.imshow(display_ndvi, extent=extent, aspect='equal',
                        cmap='RdYlGn', vmin=-0.2, vmax=0.8)
@@ -100,7 +102,7 @@ def render_frame(gs, fire_mask, frame_num, n_total,
     # --- Stats box ---
     total_area = fire_count * cell_area_m2
     coverage = 100.0 * np.sum(np.isfinite(gs['T4'])) / (gs['nrows'] * gs['ncols'])
-    dn_label = 'day (NDVI)' if day_night != 'N' else 'night (T4)'
+    dn_label = 'NDVI' if has_vnir else 'T4'
 
     stats_lines = [
         f'Sweep {frame_num}/{n_total} [{dn_label}]',

@@ -2,17 +2,19 @@
 
 Trains a small neural network to classify fire vs. non-fire pixels from
 MASTER L1B data using 4 features:
-    - T4:   Brightness temperature at 3.9 μm (fire channel) [K]
-    - T11:  Brightness temperature at 11.25 μm (background channel) [K]
-    - ΔT:   T4 − T11 spectral difference [K]
-    - SWIR: Radiance at 2.16 μm (solar reflection channel) [W/m²/sr/μm]
+
+- T4:   Brightness temperature at 3.9 um (fire channel) [K]
+- T11:  Brightness temperature at 11.25 um (background channel) [K]
+- dT:   T4 - T11 spectral difference [K]
+- SWIR: Radiance at 2.16 um (solar reflection channel) [W/m2/sr/um]
 
 SWIR helps distinguish solar reflection false positives from real fire:
-sun-heated rock reflects strongly in SWIR, while fire emission at 2.16 μm
-is relatively low compared to its 3.9 μm signal.
+sun-heated rock reflects strongly in SWIR, while fire emission at 2.16 um
+is relatively low compared to its 3.9 um signal.
 
-The loss function is Soft Dice Loss:
-    Loss = 1 - 2·TP / (2·TP + FP + FN)
+The loss function is Soft Dice Loss::
+
+    Loss = 1 - 2*TP / (2*TP + FP + FN)
 
 This loss operates on absolute TP/FP/FN counts — total pixel count never
 appears, so it is not diluted by adding more background pixels. Every
