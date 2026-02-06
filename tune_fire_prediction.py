@@ -822,6 +822,7 @@ def main() -> None:
           f'{len(y_test) - int(y_test.sum()):,} no-fire)')
 
     # Step 4: Oversample
+    # duplicates fire samples (with replacement) until fire:no-fire ratio reaches 1:1, so training sees:
     print('\n--- Step 4: Oversampling fire class ---')
     X_train_bal, y_train_bal, w_train_bal = oversample_minority(
         X_train, y_train, w_train, ratio=1.0)
