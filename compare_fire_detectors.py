@@ -69,6 +69,9 @@ def load_flight_features() -> FlightFeatures:
 # ── Comparison ───────────────────────────────────────────────
 
 
+GROUND_TRUTH_FLIGHT = '24-801-03'
+
+
 def compare_detectors(
     flight_features: FlightFeatures,
     model: FireMLP,
@@ -87,6 +90,9 @@ def compare_detectors(
     The threshold detector labels (y) come from detect_fire_simple() which
     uses T4 > 325K (day) / 310K (night) and dT > 10K.
 
+    Flight 03 (pre-burn) labels are forced to 0 because there is no real
+    fire — any threshold detections on that flight are false positives.
+
     Args:
         flight_features (FlightFeatures): Dict from load_flight_features().
         model (FireMLP): Trained model (on CPU).
@@ -100,7 +106,7 @@ def compare_detectors(
     header = (f'  {"Flight":<14s} {"Comment":<22s} {"Locations":>9s}  '
               f'{"Thresh":>6s}  {"ML":>6s}  '
               f'{"Both":>6s}  {"ML only":>7s}  {"Thr only":>8s}  '
-              f'{"True Positives":>5s}  {"False Positives":>5s}  {"False Negatives":>5s}  {"True Negatives":>6s}')
+              f'{"TP":>5s}  {"FP":>5s}  {"FN":>5s}  {"TN":>6s}')
     print(header)
     print('  ' + '-' * (len(header) - 2))
 
@@ -115,6 +121,10 @@ def compare_detectors(
         d = flight_features[fnum]
         X, y = d['X'], d['y']
         comment = d.get('comment', '')[:22]
+
+        # Flight 03 is ground truth no-fire; force labels to 0
+        if fnum == GROUND_TRUTH_FLIGHT:
+            y = np.zeros_like(y)
 
         # ML predictions via inference module
         ml_fire, probs = predict(model, scaler, X, threshold=threshold)

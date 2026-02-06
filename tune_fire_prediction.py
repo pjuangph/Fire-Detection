@@ -344,8 +344,10 @@ def extract_train_test(
     gt_train_idx = perm[n_gt_test:]
 
     # Train: 80% of ground truth + burn flights from train_flights
+    # Force ground truth labels to 0 — flight 03 has no real fire;
+    # any threshold detections there are false positives.
     train_X = [gt['X'][gt_train_idx]]
-    train_y = [gt['y'][gt_train_idx]]
+    train_y = [np.zeros(len(gt_train_idx), dtype=np.float32)]
     train_flight_src = [np.full(len(gt_train_idx), ground_truth_flight)]
     for f in train_flights:
         if f != ground_truth_flight:
@@ -354,8 +356,9 @@ def extract_train_test(
             train_flight_src.append(np.full(len(flight_features[f]['y']), f))
 
     # Test: 20% of ground truth + burn flights from test_flights
+    # Force ground truth labels to 0 (same reasoning as train)
     test_X = [gt['X'][gt_test_idx]]
-    test_y = [gt['y'][gt_test_idx]]
+    test_y = [np.zeros(len(gt_test_idx), dtype=np.float32)]
     test_flight_src = [np.full(len(gt_test_idx), ground_truth_flight)]
     for f in test_flights:
         if f != ground_truth_flight:
@@ -852,9 +855,9 @@ def main() -> None:
               f'std={scaler.scale_[i]:10.3f}')
 
     # Step 6: Train with weighted BCE
-    print('\n--- Step 6: Training (Weighted BCE Loss, 300 epochs) ---')
+    print('\n--- Step 6: Training (Weighted BCE Loss, 100 epochs) ---')
     model, loss_history = train_model(
-        X_train_norm, y_train_bal, w_train_bal, n_epochs=300, lr=1e-3)
+        X_train_norm, y_train_bal, w_train_bal, n_epochs=100, lr=1e-3)
 
     # Step 7: Evaluate
     print('\n--- Step 7: Evaluation ---')
