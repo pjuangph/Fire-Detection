@@ -9,7 +9,7 @@
 #
 # Regenerable plots (have a generating script):
 #   tune_fire_prediction.py  → plots/tune_*.png
-#   realtime_fire.py         → plots/realtime_*/frame_*.png
+#   realtime_fire.py         → plots/realtime/{detector}-{flight}-{frame}.png
 #   mosaic_flight.py         → plots/mosaic_flight_*.png
 #   plot_burn_locations.py   → plots/burn_locations_*.png
 #   plot_vegetation.py       → plots/vegetation_*.png
@@ -67,7 +67,8 @@ delete_all_plots() {
         rm_if_exists "$f"
     done
 
-    # realtime_fire.py outputs (frame directories)
+    # realtime_fire.py outputs (new flat dir + old per-flight dirs)
+    rm_if_exists plots/realtime
     for d in plots/realtime_*/; do
         rm_if_exists "$d"
     done

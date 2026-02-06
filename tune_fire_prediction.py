@@ -527,7 +527,7 @@ def train_model(
 
         avg_loss = total_loss / len(X_t)
         loss_history[epoch] = avg_loss
-        pbar.set_postfix({'loss': f'{avg_loss:.4f}'})
+        pbar.set_postfix({'loss': f'{avg_loss:.4e}'})
         
     # Move model back to CPU for saving and inference
     model = model.cpu()

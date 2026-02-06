@@ -100,7 +100,7 @@ def compare_detectors(
     header = (f'  {"Flight":<14s} {"Comment":<22s} {"Locations":>9s}  '
               f'{"Thresh":>6s}  {"ML":>6s}  '
               f'{"Both":>6s}  {"ML only":>7s}  {"Thr only":>8s}  '
-              f'{"TP":>5s}  {"FP":>5s}  {"FN":>5s}  {"TN":>6s}')
+              f'{"True Positives":>5s}  {"False Positives":>5s}  {"False Negatives":>5s}  {"True Negatives":>6s}')
     print(header)
     print('  ' + '-' * (len(header) - 2))
 
