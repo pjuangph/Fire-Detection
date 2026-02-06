@@ -191,12 +191,17 @@ def train_model(
     batch_size: int = 4096,
     loss_fn: str = 'bce',
     hidden_layers: list[int] | None = None,
+    P_total: float | None = None,
 ) -> tuple[FireMLP, NDArrayFloat]:
     """Train FireMLP with the selected loss function.
 
     Loss functions:
         - 'bce': Pixel-wise weighted BCEWithLogitsLoss
         - 'error-rate': Soft differentiable (FN+FP)/P
+
+    Args:
+        P_total: True fire count (pre-oversampling) for error-rate loss.
+            Required when loss_fn='error-rate'.
 
     Returns:
         Tuple of (model, loss_history).
@@ -207,7 +212,8 @@ def train_model(
     model = FireMLP(hidden_layers=hidden_layers).to(device)
     use_error_rate = loss_fn == 'error-rate'
     if use_error_rate:
-        P_total = float(y_train.sum())
+        if P_total is None:
+            P_total = float(y_train.sum())
         criterion = SoftErrorRateLoss(P_total).to(device)
         loss_label = f'Soft (FN+FP)/P, P={P_total:.0f}'
     else:
@@ -332,12 +338,14 @@ def main() -> None:
               f'std={scaler.scale_[i]:10.3f}')
 
     # Step 6: Train
+    # P_total uses original (pre-oversampling) fire count for error-rate loss
+    P_original = float(y_train.sum())
     loss_label = 'Soft (FN+FP)/P' if args.loss == 'error-rate' else 'Weighted BCE'
     print(f'\n--- Step 6: Training ({loss_label}, 100 epochs) ---')
     model, loss_history = train_model(
         X_train_norm, y_train_bal, w_train_bal,
         n_epochs=100, lr=1e-3, loss_fn=args.loss,
-        hidden_layers=args.layers)
+        hidden_layers=args.layers, P_total=P_original)
 
     # Step 7: Evaluate
     print('\n--- Step 7: Evaluation ---')
