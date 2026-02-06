@@ -62,7 +62,7 @@ Feature Engineering
 -------------------
 
 For each grid cell, we maintain running accumulators across all
-observations. From these, 8 aggregate features are computed:
+observations. From these, 12 aggregate features are computed:
 
 .. list-table::
    :header-rows: 1
@@ -83,6 +83,18 @@ observations. From these, 8 aggregate features are computed:
    * - ``dT_max``
      - max(T4 - T11) across all observations
      - Strongest spectral difference -- fire signature strength
+   * - ``SWIR_max``
+     - max(SWIR) across all observations
+     - Peak 2.2 μm radiance -- fire Planck emission at short wavelength
+   * - ``SWIR_mean``
+     - mean(SWIR) across all observations
+     - Average SWIR radiance -- normalizes peak, high at night = fire
+   * - ``Red_mean``
+     - mean(Red) across all observations
+     - Average 0.654 μm radiance -- implicit day/night indicator (~0 at night)
+   * - ``NIR_mean``
+     - mean(NIR) across all observations
+     - Average 0.866 μm radiance -- implicit day/night indicator (~0 at night)
    * - ``NDVI_min``
      - min(NDVI) across daytime observations
      - Lowest vegetation index -- burn scar indicator
@@ -98,9 +110,10 @@ observations. From these, 8 aggregate features are computed:
 
 **Why these features work:** A fire pixel has high ``T4_max`` relative to
 ``T4_mean`` (thermal anomaly), large ``dT_max`` (strong spectral fire
-signature), and large ``NDVI_drop`` (vegetation burned away). A false
-positive from solar glint has high ``T4_max`` but NDVI remains stable
-(no vegetation loss). The MLP learns these discriminating patterns.
+signature), high ``SWIR_max`` (Planck emission from hot sources), and
+large ``NDVI_drop`` (vegetation burned away). A false positive from solar
+glint has high ``T4_max`` but NDVI remains stable (no vegetation loss)
+and SWIR is low at night. The MLP learns these discriminating patterns.
 
 
 Model Architecture
@@ -108,9 +121,9 @@ Model Architecture
 
 ::
 
-    Input (8 features)
+    Input (12 features)
       |
-      Linear(8, 64) + ReLU
+      Linear(12, 64) + ReLU
       |
       Linear(64, 32) + ReLU
       |
@@ -118,7 +131,7 @@ Model Architecture
       |
       sigmoid -> P(fire) in [0, 1]
 
-- **Parameters:** 2,465
+- **Parameters:** 2,721
 - **Loss:** Pixel-wise weighted BCEWithLogitsLoss (see below)
 - **Optimizer:** Adam, lr = 0.001
 - **Epochs:** 300
@@ -203,8 +216,8 @@ Training Data
 **Model saved to:** ``checkpoint/fire_detector.pt`` containing:
 
 - ``model_state``: PyTorch state dict
-- ``mean``, ``std``: Training normalization statistics (8-element arrays)
-- ``n_features``: 8
+- ``mean``, ``std``: Training normalization statistics (12-element arrays)
+- ``n_features``: 12
 - ``threshold``: 0.5
 - ``feature_names``: List of feature names
 
@@ -218,6 +231,7 @@ Integration with Real-Time System
 2. If ``checkpoint/fire_detector.pt`` exists, loads the MLP
 3. After each sweep, ``process_sweep()`` updates running accumulators in
    grid state (``T4_max``, ``T4_sum``, ``T11_sum``, ``dT_max``,
+   ``SWIR_max``, ``SWIR_sum``, ``Red_sum``, ``NIR_sum``,
    ``NDVI_min``, ``NDVI_sum``, ``NDVI_obs``)
 4. The ML model computes aggregate features from accumulators and
    predicts P(fire) per pixel, replacing the threshold-based

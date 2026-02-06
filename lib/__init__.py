@@ -10,7 +10,10 @@ from lib.io import (
 )
 from lib.fire import (
     detect_fire_simple, detect_fire, is_daytime, detect_fire_zones,
-    compute_aggregate_features, MLFireDetector, load_fire_model,
+    compute_aggregate_features,
+)
+from lib.inference import (
+    FireMLP, FEATURE_NAMES, load_model, predict, load_fire_model,
 )
 from lib.vegetation import compute_ndvi, has_sunlight, detect_vegetation_loss
 from lib.mosaic import (
@@ -19,4 +22,10 @@ from lib.mosaic import (
 from lib.stats import (
     build_pixel_table, compute_location_stats, compute_cell_area_m2,
     format_area,
+)
+from lib.features import build_location_features
+from lib.losses import SoftErrorRateLoss, compute_pixel_weights
+from lib.evaluation import get_device, evaluate, print_metrics
+from lib.plotting import (
+    plot_training_loss, plot_probability_hist, plot_prediction_map,
 )

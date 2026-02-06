@@ -4,12 +4,36 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-    
         {
             "name": "Python Debugger: Current File",
             "type": "debugpy",
             "request": "launch",
             "program": "${file}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Train Fire (BCE Loss)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/train_fire_prediction.py",
+            "args": ["--loss", "bce",
+                    "--layers", "64", "32", "16", "8"],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Train Fire (Error Rate Loss)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/train_fire_prediction.py",
+            "args": ["--loss", "error-rate",
+                    "--layers", "64", "32", "16", "8"],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Compare Detectors (All Models)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/compare_fire_detectors.py",
             "console": "integratedTerminal"
         }
     ]
