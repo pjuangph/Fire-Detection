@@ -104,56 +104,55 @@ def compare_detectors(
     print('=' * 80)
 
     header = (f'  {"Flight":<14s} {"Comment":<22s} {"Locations":>9s}  '
-              f'{"Thresh":>6s}  {"ML":>6s}  '
-              f'{"Both":>6s}  {"ML only":>7s}  {"Thr only":>8s}  '
-              f'{"TP":>5s}  {"FP":>5s}  {"FN":>5s}  {"TN":>6s}')
+              f'{"GT":>6s}  {"Thresh":>6s}  {"ML":>6s}  '
+              f'{"TP":>6s}  {"FP":>6s}  {"FN":>6s}  {"TN":>8s}')
     print(header)
     print('  ' + '-' * (len(header) - 2))
 
     model.eval()
     totals: dict[str, int] = {
-        'locs': 0, 'thresh': 0, 'ml': 0, 'both': 0,
-        'ml_only': 0, 'thresh_only': 0,
+        'locs': 0, 'gt': 0, 'thresh': 0, 'ml': 0,
         'TP': 0, 'FP': 0, 'FN': 0, 'TN': 0,
     }
 
     for fnum in sorted(flight_features.keys()):
         d = flight_features[fnum]
-        X, y = d['X'], d['y']
+        X = d['X']
+        raw_y = d['y']
         comment = d.get('comment', '')[:22]
 
-        # Flight 03 is ground truth no-fire; force labels to 0
+        # Ground truth: flight 03 is no-fire; burn flights use threshold labels
         if fnum == GROUND_TRUTH_FLIGHT:
-            y = np.zeros_like(y)
+            gt = np.zeros_like(raw_y)
+        else:
+            gt = raw_y
+        gt_fire = gt > 0.5
 
-        # ML predictions via inference module
+        # Raw threshold detector output (before ground truth override)
+        raw_thresh = raw_y > 0.5
+
+        # ML predictions
         ml_fire, probs = predict(model, scaler, X, threshold=threshold)
-        thresh_fire = y > 0.5
 
-        n_locs = len(y)
-        n_thresh = int(thresh_fire.sum())
+        n_locs = len(gt)
+        n_gt = int(gt_fire.sum())
+        n_thresh = int(raw_thresh.sum())
         n_ml = int(ml_fire.sum())
-        both = int((ml_fire & thresh_fire).sum())
-        ml_only = int((ml_fire & ~thresh_fire).sum())
-        thresh_only = int((~ml_fire & thresh_fire).sum())
 
-        # Confusion matrix (threshold labels = ground truth)
-        TP = both
-        FP = ml_only
-        FN = thresh_only
-        TN = int((~ml_fire & ~thresh_fire).sum())
+        # Confusion matrix: ML vs ground truth
+        TP = int((ml_fire & gt_fire).sum())
+        FP = int((ml_fire & ~gt_fire).sum())
+        FN = int((~ml_fire & gt_fire).sum())
+        TN = int((~ml_fire & ~gt_fire).sum())
 
         print(f'  {fnum:<14s} {comment:<22s} {n_locs:>9,}  '
-              f'{n_thresh:>6,}  {n_ml:>6,}  '
-              f'{both:>6,}  {ml_only:>7,}  {thresh_only:>8,}  '
-              f'{TP:>5,}  {FP:>5,}  {FN:>5,}  {TN:>6,}')
+              f'{n_gt:>6,}  {n_thresh:>6,}  {n_ml:>6,}  '
+              f'{TP:>6,}  {FP:>6,}  {FN:>6,}  {TN:>8,}')
 
         totals['locs'] += n_locs
+        totals['gt'] += n_gt
         totals['thresh'] += n_thresh
         totals['ml'] += n_ml
-        totals['both'] += both
-        totals['ml_only'] += ml_only
-        totals['thresh_only'] += thresh_only
         totals['TP'] += TP
         totals['FP'] += FP
         totals['FN'] += FN
@@ -161,16 +160,15 @@ def compare_detectors(
 
     print('  ' + '-' * (len(header) - 2))
     print(f'  {"TOTAL":<14s} {"":<22s} {totals["locs"]:>9,}  '
-          f'{totals["thresh"]:>6,}  {totals["ml"]:>6,}  '
-          f'{totals["both"]:>6,}  {totals["ml_only"]:>7,}  {totals["thresh_only"]:>8,}  '
-          f'{totals["TP"]:>5,}  {totals["FP"]:>5,}  {totals["FN"]:>5,}  {totals["TN"]:>6,}')
+          f'{totals["gt"]:>6,}  {totals["thresh"]:>6,}  {totals["ml"]:>6,}  '
+          f'{totals["TP"]:>6,}  {totals["FP"]:>6,}  {totals["FN"]:>6,}  {totals["TN"]:>8,}')
 
     # Summary stats
     total_P = totals['TP'] + totals['FN']
     if total_P > 0:
         error_rate = (totals['FN'] + totals['FP']) / total_P
         print(f'\n  Error rate (FN+FP)/P: {error_rate:.4f}  '
-              f'(P = {total_P:,} threshold fire locations)')
+              f'(P = {total_P:,} ground truth fire locations)')
 
     precision = totals['TP'] / max(totals['TP'] + totals['FP'], 1)
     recall = totals['TP'] / max(totals['TP'] + totals['FN'], 1)
