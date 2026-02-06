@@ -25,34 +25,39 @@ FEATURE_NAMES = [
 class FireMLP(nn.Module):
     """MLP fire detector from aggregate features.
 
-    Architecture: 12 -> 64 -> 32 -> 1 (2,721 parameters).
+    Variable-depth architecture: n_features -> [hidden layers] -> 1.
     Output is raw logits; use BCEWithLogitsLoss or sigmoid for probabilities.
 
     Attributes:
+        hidden_layers (list[int]): Hidden layer sizes used to build the network.
         net (nn.Sequential): The neural network layers.
     """
 
     def __init__(
         self,
         n_features: int = 12,
-        hidden1: int = 64,
-        hidden2: int = 32,
+        hidden_layers: list[int] | None = None,
     ) -> None:
         """Initialize FireMLP.
 
         Args:
-            n_features (int): Number of input features. Default 12.
-            hidden1 (int): First hidden layer size. Default 64.
-            hidden2 (int): Second hidden layer size. Default 32.
+            n_features: Number of input features. Default 12.
+            hidden_layers: List of hidden layer sizes, e.g. [64, 32, 16, 8].
+                Default [64, 32] for backward compatibility.
         """
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(n_features, hidden1),
-            nn.ReLU(),
-            nn.Linear(hidden1, hidden2),
-            nn.ReLU(),
-            nn.Linear(hidden2, 1),
-        )
+        if hidden_layers is None:
+            hidden_layers = [64, 32]
+        self.hidden_layers = list(hidden_layers)
+
+        layers: list[nn.Module] = []
+        in_dim = n_features
+        for h in hidden_layers:
+            layers.append(nn.Linear(in_dim, h))
+            layers.append(nn.ReLU())
+            in_dim = h
+        layers.append(nn.Linear(in_dim, 1))
+        self.net = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass.
@@ -82,7 +87,10 @@ def load_model(
     """
     checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
 
-    model = FireMLP(n_features=checkpoint.get('n_features', 12))
+    model = FireMLP(
+        n_features=checkpoint.get('n_features', 12),
+        hidden_layers=checkpoint.get('hidden_layers', [64, 32]),
+    )
     model.load_state_dict(checkpoint['model_state'])
     model.eval()
 
@@ -127,13 +135,32 @@ def predict(
     return preds, probs
 
 
+def _find_checkpoint(model_path: str | None = None) -> str | None:
+    """Find a checkpoint file, checking explicit path then auto-discovery.
+
+    Search order: explicit path > fire_detector_bce.pt > fire_detector_error-rate.pt
+    > legacy fire_detector.pt.
+    """
+    if model_path and os.path.isfile(model_path):
+        return model_path
+    for candidate in [
+        'checkpoint/fire_detector_bce.pt',
+        'checkpoint/fire_detector_error-rate.pt',
+        'checkpoint/fire_detector.pt',
+    ]:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def load_fire_model(
-    model_path: str = 'checkpoint/fire_detector.pt',
+    model_path: str | None = None,
 ) -> _MLFireDetector | None:
     """Load trained ML fire detector for realtime use. Returns None if not found."""
-    if not os.path.isfile(model_path):
+    path = _find_checkpoint(model_path)
+    if path is None:
         return None
-    return _MLFireDetector(model_path)
+    return _MLFireDetector(path)
 
 
 class _MLFireDetector:
@@ -148,7 +175,10 @@ class _MLFireDetector:
         self._compute_features = compute_aggregate_features
 
         ckpt = torch.load(model_path, weights_only=False, map_location='cpu')
-        self.model = FireMLP(n_features=ckpt.get('n_features', 12))
+        self.model = FireMLP(
+            n_features=ckpt.get('n_features', 12),
+            hidden_layers=ckpt.get('hidden_layers', [64, 32]),
+        )
         self.model.load_state_dict(ckpt['model_state'])
         self.model.eval()
         self.mean = ckpt['mean']

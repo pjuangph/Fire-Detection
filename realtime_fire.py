@@ -274,6 +274,9 @@ def main() -> None:
     parser.add_argument(
         '--detector', choices=['simple', 'ml'], default='simple',
         help='Detection method: "simple" (threshold) or "ml" (MLP model)')
+    parser.add_argument(
+        '--model', type=str, default=None,
+        help='Path to ML checkpoint (default: auto-discover)')
     args = parser.parse_args()
 
     flights = group_files_by_flight()
@@ -282,12 +285,13 @@ def main() -> None:
     # Load detector based on flag
     ml_model = None
     if args.detector == 'ml':
-        ml_model = load_fire_model()
+        ml_model = load_fire_model(args.model)
         if ml_model is None:
-            print('ERROR: --detector ml requires checkpoint/fire_detector.pt',
+            print('ERROR: --detector ml requires a checkpoint '
+                  '(train with: python train_fire_prediction.py)',
                   file=sys.stderr)
             sys.exit(1)
-        print('Using ML fire detector from checkpoint/fire_detector.pt')
+        print(f'Using ML fire detector')
     else:
         print('Using threshold fire detector (simple)')
 

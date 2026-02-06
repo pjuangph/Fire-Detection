@@ -23,3 +23,9 @@ from lib.stats import (
     build_pixel_table, compute_location_stats, compute_cell_area_m2,
     format_area,
 )
+from lib.features import build_location_features
+from lib.losses import SoftErrorRateLoss, compute_pixel_weights
+from lib.evaluation import get_device, evaluate, print_metrics
+from lib.plotting import (
+    plot_training_loss, plot_probability_hist, plot_prediction_map,
+)

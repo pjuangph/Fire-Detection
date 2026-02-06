@@ -1,17 +1,19 @@
 """compare_fire_detectors.py - Compare ML vs threshold fire detector per flight.
 
-Loads the trained ML model from checkpoint/fire_detector.pt, rebuilds
+Auto-discovers trained models from checkpoint/fire_detector_*.pt, rebuilds
 per-location features from HDF data, and prints a per-flight comparison
-table showing how many fires each detector predicts.
+table for each model.
 
 Usage:
-    python compare_fire_detectors.py
-    python compare_fire_detectors.py --threshold 0.3   # custom ML threshold
+    python compare_fire_detectors.py                                        # all models
+    python compare_fire_detectors.py --model checkpoint/fire_detector_bce.pt  # one model
+    python compare_fire_detectors.py --threshold 0.3                         # custom threshold
 """
 
 from __future__ import annotations
 
 import argparse
+import glob as globmod
 from typing import Any
 
 import numpy as np
@@ -19,7 +21,7 @@ import numpy.typing as npt
 
 from lib import group_files_by_flight, compute_grid_extent, build_pixel_table
 from lib.inference import FireMLP, FEATURE_NAMES, load_model, predict
-from tune_fire_prediction import build_location_features
+from lib.features import build_location_features
 
 # StandardScaler type used in function signatures
 from sklearn.preprocessing import StandardScaler
@@ -77,34 +79,33 @@ def compare_detectors(
     model: FireMLP,
     scaler: StandardScaler,
     threshold: float = 0.5,
+    model_label: str = 'ML',
 ) -> None:
     """Compare ML detector vs detect_fire_simple for every flight.
 
     For each flight, prints a row showing:
     - Total grid-cell locations
-    - Threshold fire detections (from detect_fire_simple labels)
+    - Ground truth fire count
+    - Threshold fire detections (raw detect_fire_simple labels)
     - ML fire detections (from trained model)
-    - Agreement breakdown (both, ML-only, threshold-only)
-    - Confusion matrix (TP, FP, FN, TN)
-
-    The threshold detector labels (y) come from detect_fire_simple() which
-    uses T4 > 325K (day) / 310K (night) and dT > 10K.
+    - Confusion matrix (TP, FP, FN, TN) of ML vs ground truth
 
     Flight 03 (pre-burn) labels are forced to 0 because there is no real
     fire — any threshold detections on that flight are false positives.
 
     Args:
-        flight_features (FlightFeatures): Dict from load_flight_features().
-        model (FireMLP): Trained model (on CPU).
-        scaler (StandardScaler): Fitted scaler for feature normalization.
-        threshold (float): ML classification threshold. Default 0.5.
+        flight_features: Dict from load_flight_features().
+        model: Trained model (on CPU).
+        scaler: Fitted scaler for feature normalization.
+        threshold: ML classification threshold. Default 0.5.
+        model_label: Short label for the ML model column (e.g. 'BCE', 'ER').
     """
     print('\n' + '=' * 80)
-    print(f'Per-Flight Detector Comparison: Threshold vs ML (threshold={threshold})')
+    print(f'Per-Flight Detector Comparison: Threshold vs {model_label} (threshold={threshold})')
     print('=' * 80)
 
     header = (f'  {"Flight":<14s} {"Comment":<22s} {"Locations":>9s}  '
-              f'{"GT":>6s}  {"Thresh":>6s}  {"ML":>6s}  '
+              f'{"GT":>6s}  {"Thresh":>6s}  {model_label:>6s}  '
               f'{"TP":>6s}  {"FP":>6s}  {"FN":>6s}  {"TN":>8s}')
     print(header)
     print('  ' + '-' * (len(header) - 2))
@@ -179,27 +180,51 @@ def compare_detectors(
 # ── Main ─────────────────────────────────────────────────────
 
 
+def _discover_checkpoints() -> list[str]:
+    """Find all fire_detector_*.pt checkpoints, sorted alphabetically."""
+    return sorted(globmod.glob('checkpoint/fire_detector_*.pt'))
+
+
 def main() -> None:
-    """Load model, build features, and compare detectors."""
+    """Load model(s), build features, and compare detectors."""
     parser = argparse.ArgumentParser(
         description='Compare ML vs threshold fire detector per flight.')
     parser.add_argument(
         '--threshold', type=float, default=0.5,
         help='ML classification threshold (default: 0.5)')
     parser.add_argument(
-        '--model', type=str, default='checkpoint/fire_detector.pt',
-        help='Path to model checkpoint')
+        '--model', type=str, default=None,
+        help='Path to a specific model checkpoint (default: auto-discover all)')
     args = parser.parse_args()
 
-    print('Loading model...')
-    model, scaler = load_model(args.model)
-    print(f'  Model: {sum(p.numel() for p in model.parameters()):,} params')
-    print(f'  Features: {FEATURE_NAMES}')
+    # Determine which checkpoints to compare
+    if args.model:
+        model_paths = [args.model]
+    else:
+        model_paths = _discover_checkpoints()
+        if not model_paths:
+            print('No checkpoints found in checkpoint/fire_detector_*.pt')
+            print('Train a model first: python train_fire_prediction.py')
+            return
+
+    print(f'Found {len(model_paths)} model(s): {", ".join(model_paths)}')
 
     print('\nBuilding per-location features...')
     flight_features = load_flight_features()
 
-    compare_detectors(flight_features, model, scaler, threshold=args.threshold)
+    for model_path in model_paths:
+        # Derive label from filename: fire_detector_bce.pt -> BCE
+        stem = model_path.rsplit('/', 1)[-1]          # fire_detector_bce.pt
+        loss_name = stem.replace('fire_detector_', '').replace('.pt', '')  # bce
+        label = loss_name.upper().replace('ERROR-RATE', 'ER')
+
+        print(f'\nLoading {model_path}...')
+        model, scaler = load_model(model_path)
+        print(f'  Model: {sum(p.numel() for p in model.parameters()):,} params')
+
+        compare_detectors(
+            flight_features, model, scaler,
+            threshold=args.threshold, model_label=label)
 
 
 if __name__ == '__main__':
