@@ -30,7 +30,7 @@ def build_pixel_table(files: list[str], lat_min: float, lat_max: float,
 
     Returns:
         pd.DataFrame with columns:
-            flight, file, lat, lon, T4, T11, dT, SWIR, NDVI, fire
+            flight, file, lat, lon, T4, T11, dT, SWIR, Red, NIR, NDVI, fire
     """
     import pandas as pd
 
@@ -62,6 +62,9 @@ def build_pixel_table(files: list[str], lat_min: float, lat_max: float,
         grid_lat = lat_max - r * GRID_RES
         grid_lon = lon_min + c * GRID_RES
 
+        Red = pf['Red'][in_bounds]
+        NIR = pf['NIR'][in_bounds]
+
         rows_list.append(pd.DataFrame({
             'flight': flight_num,
             'file': os.path.basename(filepath),
@@ -71,6 +74,8 @@ def build_pixel_table(files: list[str], lat_min: float, lat_max: float,
             'T11': T11[in_bounds],
             'dT': dT[in_bounds],
             'SWIR': SWIR[in_bounds],
+            'Red': Red,
+            'NIR': NIR,
             'NDVI': NDVI[in_bounds],
             'fire': fire[in_bounds],
         }))

@@ -72,13 +72,14 @@ def _expand_grid(gs: dict[str, Any],
     for key, fill, dtype in [
         ('T4_max', -np.inf, np.float32),
         ('dT_max', -np.inf, np.float32),
+        ('SWIR_max', -np.inf, np.float32),
         ('NDVI_min', np.inf, np.float32),
     ]:
         new_arr = np.full((new_nrows, new_ncols), fill, dtype=dtype)
         new_arr[row_off:row_off + old_nrows, col_off:col_off + old_ncols] = gs[key]
         gs[key] = new_arr
 
-    for key in ('T4_sum', 'T11_sum', 'NDVI_sum'):
+    for key in ('T4_sum', 'T11_sum', 'SWIR_sum', 'Red_sum', 'NIR_sum', 'NDVI_sum'):
         new_arr = np.zeros((new_nrows, new_ncols), dtype=np.float64)
         new_arr[row_off:row_off + old_nrows, col_off:col_off + old_ncols] = gs[key]
         gs[key] = new_arr
@@ -211,6 +212,10 @@ def init_grid_state(lat_min: float | None = None, lat_max: float | None = None,
             'T4_sum': np.empty((0, 0), dtype=np.float64),
             'T11_sum': np.empty((0, 0), dtype=np.float64),
             'dT_max': np.empty((0, 0), dtype=np.float32),
+            'SWIR_max': np.empty((0, 0), dtype=np.float32),
+            'SWIR_sum': np.empty((0, 0), dtype=np.float64),
+            'Red_sum': np.empty((0, 0), dtype=np.float64),
+            'NIR_sum': np.empty((0, 0), dtype=np.float64),
             'NDVI_min': np.empty((0, 0), dtype=np.float32),
             'NDVI_sum': np.empty((0, 0), dtype=np.float64),
             'NDVI_obs': np.empty((0, 0), dtype=np.int32),
@@ -239,6 +244,10 @@ def init_grid_state(lat_min: float | None = None, lat_max: float | None = None,
         'T4_sum': np.zeros((nrows, ncols), dtype=np.float64),
         'T11_sum': np.zeros((nrows, ncols), dtype=np.float64),
         'dT_max': np.full((nrows, ncols), -np.inf, dtype=np.float32),
+        'SWIR_max': np.full((nrows, ncols), -np.inf, dtype=np.float32),
+        'SWIR_sum': np.zeros((nrows, ncols), dtype=np.float64),
+        'Red_sum': np.zeros((nrows, ncols), dtype=np.float64),
+        'NIR_sum': np.zeros((nrows, ncols), dtype=np.float64),
         'NDVI_min': np.full((nrows, ncols), np.inf, dtype=np.float32),
         'NDVI_sum': np.zeros((nrows, ncols), dtype=np.float64),
         'NDVI_obs': np.zeros((nrows, ncols), dtype=np.int32),
@@ -329,10 +338,17 @@ def process_sweep(filepath: str, gs: dict[str, Any],
     # ── Running accumulators for ML aggregate features ──
     T4_ib = T4[in_bounds]
     T11_ib = T11[in_bounds]
+    SWIR_ib = SWIR[in_bounds]
     gs['T4_max'][r, c] = np.maximum(gs['T4_max'][r, c], T4_ib)
     gs['T4_sum'][r, c] += T4_ib.astype(np.float64)
     gs['T11_sum'][r, c] += T11_ib.astype(np.float64)
     gs['dT_max'][r, c] = np.maximum(gs['dT_max'][r, c], T4_ib - T11_ib)
+    gs['SWIR_max'][r, c] = np.maximum(gs['SWIR_max'][r, c], SWIR_ib)
+    gs['SWIR_sum'][r, c] += SWIR_ib.astype(np.float64)
+    Red_ib = pf['Red'][in_bounds]
+    NIR_ib = pf['NIR'][in_bounds]
+    gs['Red_sum'][r, c] += np.where(np.isfinite(Red_ib), Red_ib, 0.0).astype(np.float64)
+    gs['NIR_sum'][r, c] += np.where(np.isfinite(NIR_ib), NIR_ib, 0.0).astype(np.float64)
 
     # ── Current sweep NDVI ──
     sweep_ndvi = pf['NDVI'][in_bounds]
@@ -403,6 +419,10 @@ def process_sweep(filepath: str, gs: dict[str, Any],
         gs['T4_sum'][cleared] = 0
         gs['T11_sum'][cleared] = 0
         gs['dT_max'][cleared] = -np.inf
+        gs['SWIR_max'][cleared] = -np.inf
+        gs['SWIR_sum'][cleared] = 0
+        gs['Red_sum'][cleared] = 0
+        gs['NIR_sum'][cleared] = 0
         gs['NDVI_min'][cleared] = np.inf
         gs['NDVI_sum'][cleared] = 0
         gs['NDVI_obs'][cleared] = 0

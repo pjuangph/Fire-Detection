@@ -1,12 +1,16 @@
 """tune_fire_prediction.py - Train MLP fire detector with accumulated observations.
 
-Trains an MLP that predicts fire from 8 aggregate features computed across
+Trains an MLP that predicts fire from 12 aggregate features computed across
 all observations of each pixel:
 
   T4_max    — peak temperature (fire spike)
   T4_mean   — average thermal state (normalizes the peak)
   T11_mean  — background temperature (stable reference)
   dT_max    — strongest T4-T11 difference (fire signature)
+  SWIR_max  — peak 2.2μm radiance (fire Planck emission)
+  SWIR_mean — average SWIR radiance (normalizes peak)
+  Red_mean  — average Red radiance (day/night indicator)
+  NIR_mean  — average NIR radiance (day/night indicator)
   NDVI_min  — lowest vegetation (burn scar indicator)
   NDVI_mean — average vegetation (normalizes the drop)
   NDVI_drop — NDVI_first - NDVI_min (temporal vegetation loss)
@@ -62,7 +66,7 @@ Metrics = dict[str, int | float]
 def build_location_features(
     pixel_df: pd.DataFrame,
 ) -> tuple[NDArrayFloat, NDArrayFloat, NDArrayFloat, NDArrayFloat]:
-    """Compute 8 aggregate features per grid-cell location from pixel table.
+    """Compute 12 aggregate features per grid-cell location from pixel table.
 
     Groups by (lat, lon) and computes running statistics that mirror
     what process_sweep() maintains in gs accumulators. Features are designed
@@ -72,24 +76,28 @@ def build_location_features(
     - Giglio et al. (2003) "An Enhanced Contextual Fire Detection Algorithm"
     - Schroeder et al. (2014) "The New VIIRS 375m Active Fire Detection"
 
-    The 8 aggregate features:
+    The 12 aggregate features:
         1. T4_max: Peak 3.9μm brightness temperature (fire spike)
         2. T4_mean: Average thermal state (normalizes peak)
         3. T11_mean: Background 11μm temperature (stable reference)
         4. dT_max: Strongest T4-T11 difference (fire signature)
-        5. NDVI_min: Lowest vegetation index (burn scar indicator)
-        6. NDVI_mean: Average vegetation (normalizes drop)
-        7. NDVI_drop: First NDVI - min NDVI (temporal vegetation loss)
-        8. obs_count: Number of observations (reliability indicator)
+        5. SWIR_max: Peak 2.2μm radiance (fire emits strongly in SWIR)
+        6. SWIR_mean: Average SWIR radiance (normalizes peak)
+        7. Red_mean: Average Red radiance (~0 at night, ~40+ day)
+        8. NIR_mean: Average NIR radiance (~0 at night, ~40+ day)
+        9. NDVI_min: Lowest vegetation index (burn scar indicator)
+       10. NDVI_mean: Average vegetation (normalizes drop)
+       11. NDVI_drop: First NDVI - min NDVI (temporal vegetation loss)
+       12. obs_count: Number of observations (reliability indicator)
 
     Args:
         pixel_df (pd.DataFrame): DataFrame from build_pixel_table() with columns
-            lat, lon, T4, T11, dT, SWIR, NDVI, fire.
+            lat, lon, T4, T11, dT, SWIR, Red, NIR, NDVI, fire.
 
     Returns:
         tuple[NDArrayFloat, NDArrayFloat, NDArrayFloat, NDArrayFloat]: Tuple of
             (X, y, lats, lons) where:
-            - X: (N_locations, 8) float32 feature matrix
+            - X: (N_locations, 12) float32 feature matrix
             - y: (N_locations,) float32 labels (1 if any observation was fire)
             - lats: (N_locations,) latitude coordinates
             - lons: (N_locations,) longitude coordinates
@@ -100,6 +108,12 @@ def build_location_features(
     T4_mean = np.asarray(grouped['T4'].mean().values)
     T11_mean = np.asarray(grouped['T11'].mean().values)
     dT_max = np.asarray(grouped['dT'].max().values)
+
+    # SWIR features: Ch 22 (2.162 μm) — fire emits strongly in SWIR due to
+    # Planck radiation from hot sources. At night, only thermal emission
+    # contributes, so high SWIR at night = definite fire.
+    swir_max = np.asarray(grouped['SWIR'].max().values)
+    swir_mean = np.asarray(grouped['SWIR'].mean().values)
 
     # NDVI features: only from daytime (finite NDVI) observations
     ndvi_min = np.asarray(grouped['NDVI'].min().values)
@@ -124,8 +138,22 @@ def build_location_features(
     ndvi_mean = np.where(np.isfinite(ndvi_mean), ndvi_mean, 0.0)
     ndvi_drop = np.where(np.isfinite(ndvi_drop), ndvi_drop, 0.0)
 
+    # Fill NaN SWIR with 0 (shouldn't happen, but safety)
+    swir_max = np.where(np.isfinite(swir_max), swir_max, 0.0)
+    swir_mean = np.where(np.isfinite(swir_mean), swir_mean, 0.0)
+
+    # Red/NIR mean: implicit day/night indicator
+    # Daytime: Red ~20-60, NIR ~20-60 W/m²/sr/μm (solar reflection)
+    # Nighttime: Red ~0, NIR ~0 (no solar signal, just sensor noise)
+    red_mean = np.asarray(grouped['Red'].mean().values)
+    nir_mean = np.asarray(grouped['NIR'].mean().values)
+    red_mean = np.where(np.isfinite(red_mean), red_mean, 0.0)
+    nir_mean = np.where(np.isfinite(nir_mean), nir_mean, 0.0)
+
     X = np.stack([
         T4_max, T4_mean, T11_mean, dT_max,
+        swir_max, swir_mean,
+        red_mean, nir_mean,
         ndvi_min, ndvi_mean, ndvi_drop, obs_count,
     ], axis=1).astype(np.float32)
 
@@ -220,7 +248,7 @@ def load_all_data(
     """Build pixel tables for all flights and compute location features.
 
     Processes HDF files for each flight, extracts observations, and computes
-    8 aggregate features per grid-cell location.
+    12 aggregate features per grid-cell location.
 
     Args:
         flights (dict[str, dict[str, Any]]): Flight metadata from
@@ -229,7 +257,7 @@ def load_all_data(
 
     Returns:
         FlightFeatures: Dict mapping flight_num to feature dict containing:
-            - 'X': (N, 8) float32 feature matrix
+            - 'X': (N, 12) float32 feature matrix
             - 'y': (N,) float32 labels
             - 'lats': (N,) latitude coordinates
             - 'lons': (N,) longitude coordinates
@@ -298,10 +326,10 @@ def extract_train_test(
 
     Returns:
         tuple[NDArrayFloat, ...]: Six arrays:
-            - X_train: (N_train, 8) training features
+            - X_train: (N_train, 12) training features
             - y_train: (N_train,) training labels
             - w_train: (N_train,) training weights (normalized mean=1)
-            - X_test: (N_test, 8) test features
+            - X_test: (N_test, 12) test features
             - y_test: (N_test,) test labels
             - w_test: (N_test,) test weights (normalized mean=1)
     """
@@ -373,7 +401,7 @@ def oversample_minority(
     imbalanced datasets, with the addition of weight preservation.
 
     Args:
-        X (NDArrayFloat): Feature array of shape (N, 8).
+        X (NDArrayFloat): Feature array of shape (N, 12).
         y (NDArrayFloat): Label array of shape (N,).
         w (NDArrayFloat): Weight array of shape (N,), pixel-wise weights.
         ratio (float): Target fire:no-fire ratio. Default 1.0 (balanced).
@@ -406,61 +434,8 @@ def oversample_minority(
 
 
 # ── Model ─────────────────────────────────────────────────────
-
-
-FEATURE_NAMES = [
-    'T4_max', 'T4_mean', 'T11_mean', 'dT_max',
-    'NDVI_min', 'NDVI_mean', 'NDVI_drop', 'obs_count',
-]
-
-
-class FireMLP(nn.Module):
-    """MLP fire detector from aggregate features.
-
-    A simple multi-layer perceptron for binary fire classification.
-    Architecture: 8 → 64 → 32 → 1 (2,465 parameters).
-
-    Design choices:
-        - Two hidden layers with ReLU activation (universal approximation)
-        - No dropout (dataset is large enough, regularization via weighting)
-        - Output is raw logits (use BCEWithLogitsLoss for numerical stability)
-
-    Attributes:
-        net (nn.Sequential): The neural network layers.
-    """
-
-    def __init__(
-        self,
-        n_features: int = 8,
-        hidden1: int = 64,
-        hidden2: int = 32,
-    ) -> None:
-        """Initialize FireMLP.
-
-        Args:
-            n_features (int): Number of input features. Default 8.
-            hidden1 (int): First hidden layer size. Default 64.
-            hidden2 (int): Second hidden layer size. Default 32.
-        """
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(n_features, hidden1),
-            nn.ReLU(),
-            nn.Linear(hidden1, hidden2),
-            nn.ReLU(),
-            nn.Linear(hidden2, 1),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass.
-
-        Args:
-            x (torch.Tensor): Input tensor of shape (batch, n_features).
-
-        Returns:
-            torch.Tensor: Raw logits of shape (batch,).
-        """
-        return self.net(x).squeeze(-1)
+# FireMLP and FEATURE_NAMES are defined in lib/inference.py (single source of truth)
+from lib.inference import FireMLP, FEATURE_NAMES  # noqa: E402
 
 
 # ── Training ──────────────────────────────────────────────────
@@ -485,7 +460,7 @@ def train_model(
     w_train: NDArrayFloat,
     n_epochs: int = 300,
     lr: float = 1e-3,
-    batch_size: int = 1024,
+    batch_size: int = 4096,
 ) -> tuple[FireMLP, NDArrayFloat]:
     """Train FireMLP with pixel-wise weighted BCEWithLogitsLoss.
 
@@ -502,7 +477,7 @@ def train_model(
         - batch_size=1024: balances GPU utilization and gradient noise
 
     Args:
-        X_train (NDArrayFloat): Normalized feature array of shape (N, 8).
+        X_train (NDArrayFloat): Normalized feature array of shape (N, 12).
         y_train (NDArrayFloat): Label array of shape (N,).
         w_train (NDArrayFloat): Pixel-wise weights of shape (N,),
             normalized so mean=1.
@@ -560,8 +535,6 @@ def train_model(
 
 
 # ── Evaluation ────────────────────────────────────────────────
-
-
 def evaluate(
     model: FireMLP,
     X: NDArrayFloat,
@@ -575,7 +548,7 @@ def evaluate(
 
     Args:
         model (FireMLP): Trained model to evaluate.
-        X (NDArrayFloat): Normalized feature array of shape (N, 8).
+        X (NDArrayFloat): Normalized feature array of shape (N, 12).
         y (NDArrayFloat): Ground truth labels of shape (N,).
         threshold (float): Classification threshold for P(fire). Default 0.5.
 
@@ -603,7 +576,6 @@ def evaluate(
         'TP': TP, 'FP': FP, 'FN': FN, 'TN': TN,
         'precision': precision, 'recall': recall,
     }, probs
-
 
 def print_metrics(metrics: Metrics, label: str = '') -> None:
     """Print evaluation metrics to stdout.
@@ -905,7 +877,7 @@ def main() -> None:
         'mean': scaler.mean_,
         'std': scaler.scale_,
         'scaler': scaler,  # Save full scaler for sklearn compatibility
-        'n_features': 8,
+        'n_features': 12,
         'threshold': 0.5,
         'feature_names': FEATURE_NAMES,
     }, model_path)
@@ -923,44 +895,15 @@ def main() -> None:
 
     plot_prediction_map(flight_features, model, scaler, '24-801-06')
 
-    # Summary with threshold vs ML comparison
+    # Summary
     print('\n' + '=' * 60)
     print('Summary:')
     print(f'  Features:  {len(FEATURE_NAMES)} aggregate features')
-    print(f'  Model:     8 \u2192 64 \u2192 32 \u2192 1 ({sum(p.numel() for p in model.parameters()):,} params)')
-
-    # Compute ML predictions on test set
-    ml_preds = (test_probs >= 0.5).astype(bool)
-    thresh_preds = (y_test >= 0.5).astype(bool)
-
-    # Comparison metrics
-    n_thresh_fire = int(thresh_preds.sum())
-    n_ml_fire = int(ml_preds.sum())
-    both_fire = int((ml_preds & thresh_preds).sum())
-    ml_only = int((ml_preds & ~thresh_preds).sum())
-    thresh_only = int((~ml_preds & thresh_preds).sum())
-    both_nofire = int((~ml_preds & ~thresh_preds).sum())
-
-    print('\n  Threshold vs ML Comparison (Test Set):')
-    print(f'    Threshold fire detections:  {n_thresh_fire:,}')
-    print(f'    ML fire detections:         {n_ml_fire:,}')
-    print(f'    Both agree (fire):          {both_fire:,}')
-    print(f'    Both agree (no fire):       {both_nofire:,}')
-    print(f'    ML only (thresh missed):    {ml_only:,}')
-    print(f'    Threshold only (ML missed): {thresh_only:,}')
-    agreement = 100.0 * (both_fire + both_nofire) / len(y_test)
-    print(f'    Agreement rate:             {agreement:.1f}%')
-
-    print('\n  ML Model Performance (vs threshold labels):')
-    print(f'    TP: {test_metrics["TP"]:,}  (ML + threshold both say fire)')
-    print(f'    TN: {test_metrics["TN"]:,}  (ML + threshold both say no fire)')
-    print(f'    FP: {test_metrics["FP"]:,}  (ML says fire, threshold says no)')
-    print(f'    FN: {test_metrics["FN"]:,}  (ML says no fire, threshold says fire)')
-    print(f'    Precision: {test_metrics["precision"]:.4f}')
-    print(f'    Recall:    {test_metrics["recall"]:.4f}')
-
-    print(f'\n  Checkpoint: {model_path}')
+    print(f'  Model:     12 \u2192 64 \u2192 32 \u2192 1 ({sum(p.numel() for p in model.parameters()):,} params)')
+    print(f'  Checkpoint: {model_path}')
     print(f'  Dataset:    {dataset_path}')
+    print(f'\n  To compare detectors per flight:')
+    print(f'    python compare_fire_detectors.py')
     print(f'\n  To use in realtime_fire.py:')
     print(f'    Model auto-detected from {model_path}')
     print('Done.')
