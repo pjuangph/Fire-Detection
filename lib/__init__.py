@@ -10,6 +10,7 @@ from lib.io import (
 )
 from lib.fire import (
     detect_fire_simple, detect_fire, is_daytime, detect_fire_zones,
+    compute_aggregate_features, MLFireDetector, load_fire_model,
 )
 from lib.vegetation import compute_ndvi, has_sunlight, detect_vegetation_loss
 from lib.mosaic import (

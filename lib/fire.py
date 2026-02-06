@@ -1,7 +1,8 @@
-"""Fire detection algorithms: threshold, contextual, and zone analysis."""
+"""Fire detection algorithms: threshold, contextual, zone analysis, and ML."""
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import numpy as np
@@ -12,6 +13,7 @@ def detect_fire_simple(T4: np.ndarray, T11: np.ndarray,
                        T4_thresh: float = 325.0,
                        dT_thresh: float = 10.0) -> np.ndarray:
     """Simple absolute fire detection (no contextual test, for speed on mosaics).
+    Based on MODIS MOD14 / Giglio et al. approach.
 
     Args:
         T4: Brightness temperature at ~3.9 μm [K].
@@ -146,3 +148,132 @@ def detect_fire_zones(fire_mask: np.ndarray) -> tuple[np.ndarray, int, list[tupl
         zone_sizes.append((z, int(np.sum(labels == z))))
     zone_sizes.sort(key=lambda x: -x[1])
     return labels, n_zones, zone_sizes
+
+
+# ── ML Fire Detection ─────────────────────────────────────────
+
+
+def compute_aggregate_features(gs: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+    """Compute 8 aggregate features per pixel from grid state accumulators.
+
+    Features: [T4_max, T4_mean, T11_mean, dT_max,
+               NDVI_min, NDVI_mean, NDVI_drop, obs_count]
+
+    Returns:
+        features: (N, 8) float32 array for pixels with >=1 observation
+        valid_mask: (nrows, ncols) bool — which pixels have features
+    """
+    obs = gs['obs_count']
+    valid_mask = obs >= 1
+
+    obs_safe = np.maximum(obs[valid_mask], 1).astype(np.float64)
+    ndvi_obs_safe = np.maximum(gs['NDVI_obs'][valid_mask], 1).astype(np.float64)
+
+    T4_max = gs['T4_max'][valid_mask]
+    T4_mean = (gs['T4_sum'][valid_mask] / obs_safe).astype(np.float32)
+    T11_mean = (gs['T11_sum'][valid_mask] / obs_safe).astype(np.float32)
+    dT_max = gs['dT_max'][valid_mask]
+
+    NDVI_min_raw = gs['NDVI_min'][valid_mask]
+    NDVI_min = np.where(np.isinf(NDVI_min_raw), 0.0, NDVI_min_raw).astype(np.float32)
+    NDVI_mean = (gs['NDVI_sum'][valid_mask] / ndvi_obs_safe).astype(np.float32)
+    # Where no daytime obs, set NDVI features to 0 (neutral)
+    no_ndvi = gs['NDVI_obs'][valid_mask] == 0
+    NDVI_min[no_ndvi] = 0.0
+    NDVI_mean[no_ndvi] = 0.0
+
+    # NDVI_drop = baseline - current min (how much vegetation was lost)
+    baseline = gs['NDVI_baseline'][valid_mask]
+    NDVI_drop = np.where(
+        np.isfinite(baseline) & ~np.isinf(NDVI_min_raw),
+        baseline - NDVI_min,
+        0.0,
+    ).astype(np.float32)
+
+    obs_count = obs[valid_mask].astype(np.float32)
+
+    features = np.stack([
+        T4_max, T4_mean, T11_mean, dT_max,
+        NDVI_min, NDVI_mean, NDVI_drop, obs_count,
+    ], axis=1).astype(np.float32)
+
+    # Replace any remaining non-finite values with 0
+    features = np.where(np.isfinite(features), features, 0.0).astype(np.float32)
+
+    return features, valid_mask
+
+
+class MLFireDetector:
+    """Wrapper for saved per-pixel MLP fire detector using aggregate features.
+
+    Loads a trained model from a checkpoint file and predicts fire from
+    the running accumulators stored in grid state (gs).
+    """
+
+    def __init__(self, model_path: str):
+        import torch
+        import torch.nn as nn
+
+        ckpt = torch.load(model_path, weights_only=False, map_location='cpu')
+        n = ckpt['n_features']
+        self.net = nn.Sequential(
+            nn.Linear(n, 64), nn.ReLU(),
+            nn.Linear(64, 32), nn.ReLU(),
+            nn.Linear(32, 1),
+        )
+        self.net.load_state_dict(ckpt['model_state'])
+        self.net.eval()
+        self.mean = ckpt['mean']
+        self.std = ckpt['std']
+        self.threshold = ckpt.get('threshold', 0.5)
+
+    def predict_from_gs(self, gs: dict[str, Any]) -> np.ndarray:
+        """Compute aggregate features from gs accumulators, run MLP.
+
+        Returns:
+            bool fire mask (nrows x ncols).
+        """
+        import torch
+
+        features, valid_mask = compute_aggregate_features(gs)
+        fire_mask = np.zeros((gs['nrows'], gs['ncols']), dtype=bool)
+
+        if features.shape[0] == 0:
+            return fire_mask
+
+        x = (features - self.mean) / self.std
+        x = np.where(np.isfinite(x), x, 0.0).astype(np.float32)
+
+        with torch.no_grad():
+            logits = self.net(torch.tensor(x))
+            probs = torch.sigmoid(logits).squeeze(-1).numpy()
+
+        fire_mask[valid_mask] = probs >= self.threshold
+        return fire_mask
+
+    def predict_proba_from_gs(self, gs: dict[str, Any]) -> np.ndarray:
+        """Return P(fire) grid (nrows x ncols), NaN where no data."""
+        import torch
+
+        features, valid_mask = compute_aggregate_features(gs)
+        prob_grid = np.full((gs['nrows'], gs['ncols']), np.nan, dtype=np.float32)
+
+        if features.shape[0] == 0:
+            return prob_grid
+
+        x = (features - self.mean) / self.std
+        x = np.where(np.isfinite(x), x, 0.0).astype(np.float32)
+
+        with torch.no_grad():
+            logits = self.net(torch.tensor(x))
+            probs = torch.sigmoid(logits).squeeze(-1).numpy()
+
+        prob_grid[valid_mask] = probs
+        return prob_grid
+
+
+def load_fire_model(model_path: str = 'checkpoint/fire_detector.pt') -> MLFireDetector | None:
+    """Load trained ML fire detector. Returns None if file not found."""
+    if not os.path.isfile(model_path):
+        return None
+    return MLFireDetector(model_path)
