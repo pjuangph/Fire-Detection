@@ -38,7 +38,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
-
+from sklearn.preprocessing import StandardScaler
+from tqdm import trange
 from lib import (
     group_files_by_flight, compute_grid_extent,
     build_pixel_table, compute_location_stats,
@@ -108,6 +109,58 @@ def build_location_features(pixel_df):
     return X, y, lats, lons
 
 
+# ── Pixel-Wise Weighting ──────────────────────────────────────
+
+
+def compute_pixel_weights(y, flight_source, ground_truth_flight='24-801-03'):
+    """Compute normalized pixel-wise weights for BCE loss.
+
+    Weight = importance × inverse_frequency, then normalize to mean=1.
+
+    This ensures:
+    - Ground truth no-fire pixels (flight 03) are heavily penalized for FP
+    - Fire pixels in burn flights are prioritized for recall
+    - All categories contribute proportionally regardless of size
+
+    Args:
+        y: labels array (0 = no fire, 1 = fire)
+        flight_source: array of flight IDs for each sample
+        ground_truth_flight: flight ID with known no-fire ground truth
+
+    Returns:
+        weights: array same shape as y, normalized so mean=1
+    """
+    n_total = len(y)
+
+    # Identify categories
+    is_gt = flight_source == ground_truth_flight
+    is_fire = (y == 1) & ~is_gt
+    is_other = (y == 0) & ~is_gt
+
+    n_gt = int(is_gt.sum())
+    n_fire = int(is_fire.sum())
+    n_other = int(is_other.sum())
+
+    # Importance factors (how bad is an error on this category?)
+    IMPORTANCE_GT = 10.0      # FP on ground truth = definitely wrong
+    IMPORTANCE_FIRE = 5.0     # FN on fire = missed detection
+    IMPORTANCE_OTHER = 1.0    # Uncertain baseline
+
+    # Weight = importance × inverse-frequency
+    weights = np.ones(n_total, dtype=np.float32)
+    if n_gt > 0:
+        weights[is_gt] = IMPORTANCE_GT * (n_total / n_gt)
+    if n_fire > 0:
+        weights[is_fire] = IMPORTANCE_FIRE * (n_total / n_fire)
+    if n_other > 0:
+        weights[is_other] = IMPORTANCE_OTHER * (n_total / n_other)
+
+    # Normalize to mean=1 (keeps gradient scale stable)
+    weights = weights / weights.mean()
+
+    return weights, {'n_gt': n_gt, 'n_fire': n_fire, 'n_other': n_other}
+
+
 # ── Data Pipeline ─────────────────────────────────────────────
 
 
@@ -146,27 +199,96 @@ def load_all_data(flights):
     return flight_features
 
 
-def extract_train_test(flight_features, train_flights, test_flights):
-    """Concatenate features from specified flights."""
-    def concat_flights(fnums):
-        Xs, ys = [], []
-        for f in fnums:
-            Xs.append(flight_features[f]['X'])
-            ys.append(flight_features[f]['y'])
-        return np.concatenate(Xs), np.concatenate(ys)
+def extract_train_test(flight_features, train_flights, test_flights,
+                       ground_truth_flight='24-801-03', gt_test_ratio=0.2):
+    """Split ground truth flight between train/test, then add burn flights.
 
-    X_train, y_train = concat_flights(train_flights)
-    X_test, y_test = concat_flights(test_flights)
-    return X_train, y_train, X_test, y_test
+    Flight 03 (pre-burn, no fire) is split 80/20 between train/test.
+    This ensures test set has ground truth "no fire" data for proper FP evaluation.
+
+    Also computes pixel-wise weights using importance × inverse-frequency.
+
+    Args:
+        flight_features: dict from load_all_data()
+        train_flights: list of flight numbers for training (burn flights)
+        test_flights: list of flight numbers for testing (burn flights)
+        ground_truth_flight: flight with known no-fire ground truth
+        gt_test_ratio: fraction of ground truth to put in test set
+
+    Returns:
+        X_train, y_train, w_train, X_test, y_test, w_test
+    """
+    rng = np.random.default_rng(42)
+
+    # Split ground truth flight (03) 80/20
+    gt = flight_features[ground_truth_flight]
+    n_gt = len(gt['X'])
+    n_gt_test = int(n_gt * gt_test_ratio)
+    perm = rng.permutation(n_gt)
+    gt_test_idx = perm[:n_gt_test]
+    gt_train_idx = perm[n_gt_test:]
+
+    # Train: 80% of ground truth + burn flights from train_flights
+    train_X = [gt['X'][gt_train_idx]]
+    train_y = [gt['y'][gt_train_idx]]
+    train_flight_src = [np.full(len(gt_train_idx), ground_truth_flight)]
+    for f in train_flights:
+        if f != ground_truth_flight:
+            train_X.append(flight_features[f]['X'])
+            train_y.append(flight_features[f]['y'])
+            train_flight_src.append(np.full(len(flight_features[f]['y']), f))
+
+    # Test: 20% of ground truth + burn flights from test_flights
+    test_X = [gt['X'][gt_test_idx]]
+    test_y = [gt['y'][gt_test_idx]]
+    test_flight_src = [np.full(len(gt_test_idx), ground_truth_flight)]
+    for f in test_flights:
+        if f != ground_truth_flight:
+            test_X.append(flight_features[f]['X'])
+            test_y.append(flight_features[f]['y'])
+            test_flight_src.append(np.full(len(flight_features[f]['y']), f))
+
+    X_train = np.concatenate(train_X)
+    y_train = np.concatenate(train_y)
+    flight_src_train = np.concatenate(train_flight_src)
+
+    X_test = np.concatenate(test_X)
+    y_test = np.concatenate(test_y)
+    flight_src_test = np.concatenate(test_flight_src)
+
+    # Compute pixel-wise weights
+    w_train, train_counts = compute_pixel_weights(
+        y_train, flight_src_train, ground_truth_flight)
+    w_test, test_counts = compute_pixel_weights(
+        y_test, flight_src_test, ground_truth_flight)
+
+    print(f'  Train weights: gt={train_counts["n_gt"]:,}, '
+          f'fire={train_counts["n_fire"]:,}, other={train_counts["n_other"]:,}')
+    print(f'  Test weights:  gt={test_counts["n_gt"]:,}, '
+          f'fire={test_counts["n_fire"]:,}, other={test_counts["n_other"]:,}')
+
+    return (X_train, y_train, w_train, X_test, y_test, w_test)
 
 
-def oversample_minority(X, y, ratio=1.0):
-    """Oversample fire locations to balance training data."""
+def oversample_minority(X, y, w, ratio=1.0):
+    """Oversample fire locations to balance training data, preserving weights.
+
+    After oversampling, weights are re-normalized so mean=1.
+
+    Args:
+        X: feature array
+        y: label array
+        w: weight array (pixel-wise weights)
+        ratio: target fire:no-fire ratio
+
+    Returns:
+        X_bal, y_bal, w_bal: balanced arrays with shuffled order
+    """
     fire_mask = y == 1
     n_fire = int(fire_mask.sum())
     n_nofire = int((~fire_mask).sum())
     if n_fire == 0 or n_fire >= n_nofire * ratio:
-        return X, y
+        return X, y, w
 
     target_fire = int(n_nofire * ratio)
     rng = np.random.default_rng(42)
@@ -175,8 +297,13 @@ def oversample_minority(X, y, ratio=1.0):
 
     X_bal = np.concatenate([X, X[repeat_idx]], axis=0)
     y_bal = np.concatenate([y, y[repeat_idx]], axis=0)
+    w_bal = np.concatenate([w, w[repeat_idx]], axis=0)
+
+    # Re-normalize weights so mean=1 after oversampling
+    w_bal = w_bal / w_bal.mean()
+
     perm = rng.permutation(len(X_bal))
-    return X_bal[perm], y_bal[perm]
+    return X_bal[perm], y_bal[perm], w_bal[perm]
 
 
 # ── Model ─────────────────────────────────────────────────────
@@ -211,43 +338,76 @@ class FireMLP(nn.Module):
 # ── Training ──────────────────────────────────────────────────
 
 
-def train_model(X_train, y_train, n_epochs=300, lr=1e-3, batch_size=4096):
-    """Train FireMLP with BCEWithLogitsLoss.
+def get_device():
+    """Get best available device: MPS (Mac), CUDA (NVIDIA), or CPU."""
+    if torch.backends.mps.is_available():
+        return torch.device('mps')
+    elif torch.cuda.is_available():
+        return torch.device('cuda')
+    return torch.device('cpu')
+
+
+def train_model(X_train, y_train, w_train, n_epochs=300, lr=1e-3, batch_size=1024):
+    """Train FireMLP with pixel-wise weighted BCEWithLogitsLoss.
+
+    Uses MPS on Mac, CUDA on NVIDIA, or CPU as fallback.
+
+    The loss for each sample is weighted by w_train, which encodes:
+    - Ground truth no-fire pixels: high weight (penalize FP heavily)
+    - Fire pixels in burn flights: medium-high weight (capture real fires)
+    - Other pixels: baseline weight
+
+    Args:
+        X_train: normalized feature array (N, 8)
+        y_train: label array (N,)
+        w_train: pixel-wise weights (N,), normalized so mean=1
+        n_epochs: number of training epochs
+        lr: learning rate
+        batch_size: batch size for training
 
     Returns:
-        model: trained FireMLP
+        model: trained FireMLP (moved back to CPU)
         loss_history: list of per-epoch average loss values
     """
-    model = FireMLP()
-    criterion = nn.BCEWithLogitsLoss()
+    device = get_device()
+    print(f'  Using device: {device}')
+
+    model = FireMLP().to(device)
+    # Use reduction='none' so we can apply per-sample weights
+    criterion = nn.BCEWithLogitsLoss(reduction='none')
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     X_t = torch.tensor(X_train, dtype=torch.float32)
     y_t = torch.tensor(y_train, dtype=torch.float32)
+    w_t = torch.tensor(w_train, dtype=torch.float32)
 
-    dataset = torch.utils.data.TensorDataset(X_t, y_t)
+    dataset = torch.utils.data.TensorDataset(X_t, y_t, w_t)
     loader = torch.utils.data.DataLoader(
         dataset, batch_size=batch_size, shuffle=True)
+    avg_loss = 1000
 
-    loss_history = []
-    for epoch in range(n_epochs):
+    loss_history = np.zeros((n_epochs, 1))
+    for epoch in trange(n_epochs, desc=f"Training Model, Weighted BCE"):
         model.train()
         total_loss = 0.0
-        for X_batch, y_batch in loader:
+        for X_batch, y_batch, w_batch in loader:
+            X_batch = X_batch.to(device)
+            y_batch = y_batch.to(device)
+            w_batch = w_batch.to(device)
             optimizer.zero_grad()
             logits = model(X_batch)
-            loss = criterion(logits, y_batch)
+            # Per-sample loss, then apply weights
+            loss_per_sample = criterion(logits, y_batch)
+            loss = (loss_per_sample * w_batch).mean()
             loss.backward()
             optimizer.step()
             total_loss += loss.item() * len(X_batch)
 
         avg_loss = total_loss / len(X_t)
-        loss_history.append(avg_loss)
+        loss_history[epoch] = avg_loss
 
-        if (epoch + 1) % 50 == 0 or epoch == 0:
-            print(f'  Epoch {epoch+1:4d}/{n_epochs}: '
-                  f'BCE Loss = {avg_loss:.4f}')
-
+    # Move model back to CPU for saving and inference
+    model = model.cpu()
     return model, loss_history
 
 
@@ -333,8 +493,7 @@ def plot_probability_hist(probs_fire, probs_nofire):
     plt.close()
 
 
-def plot_prediction_map(flight_features, model, train_mean, train_std,
-                        flight_num):
+def plot_prediction_map(flight_features, model, scaler, flight_num):
     """Plot spatial fire predictions for one flight.
 
     2x2: ML pred, threshold pred, agreement, P(fire) heatmap.
@@ -343,8 +502,8 @@ def plot_prediction_map(flight_features, model, train_mean, train_std,
     X, y = d['X'], d['y']
     lats, lons = d['lats'], d['lons']
 
-    X_norm = (X - train_mean) / train_std
-    X_norm = np.where(np.isfinite(X_norm), X_norm, 0.0).astype(np.float32)
+    X_clean = np.where(np.isfinite(X), X, 0.0).astype(np.float32)
+    X_norm = scaler.transform(X_clean).astype(np.float32)
 
     model.eval()
     with torch.no_grad():
@@ -429,21 +588,29 @@ def main():
     flights = group_files_by_flight()
     flight_features = load_all_data(flights)
 
-    # Step 2: Save dataset
-    print('\n--- Step 2: Saving dataset ---')
+    # Step 2: Save dataset (skip if already exists)
+    print('\n--- Step 2: Dataset ---')
     os.makedirs('dataset', exist_ok=True)
     dataset_path = 'dataset/fire_features.pkl.gz'
-    with gzip.open(dataset_path, 'wb') as f:
-        pickle.dump(flight_features, f, protocol=pickle.HIGHEST_PROTOCOL)
-    size_mb = os.path.getsize(dataset_path) / (1024 * 1024)
-    print(f'  Saved {dataset_path} ({size_mb:.1f} MB)')
+    if os.path.exists(dataset_path):
+        print(f'  Using existing {dataset_path}')
+    else:
+        with gzip.open(dataset_path, 'wb') as f:
+            pickle.dump(flight_features, f, protocol=pickle.HIGHEST_PROTOCOL)
+        size_mb = os.path.getsize(dataset_path) / (1024 * 1024)
+        print(f'  Saved {dataset_path} ({size_mb:.1f} MB)')
 
     # Step 3: Train/test split
+    # Flight 03 (pre-burn, ground truth no fire) split 80/20 between train/test
+    # Train: 80% of 03 + flights 04, 05 (burn flights)
+    # Test: 20% of 03 + flight 06 (burn flight)
     print('\n--- Step 3: Train/test split ---')
-    train_flights = ['24-801-03', '24-801-04', '24-801-05']
-    test_flights = ['24-801-06']
-    X_train, y_train, X_test, y_test = extract_train_test(
-        flight_features, train_flights, test_flights)
+    print('  Ground truth (flight 03, no fire): 80% train, 20% test')
+    train_flights = ['24-801-04', '24-801-05']  # burn flights for training
+    test_flights = ['24-801-06']  # burn flight for testing
+    X_train, y_train, w_train, X_test, y_test, w_test = extract_train_test(
+        flight_features, train_flights, test_flights,
+        ground_truth_flight='24-801-03', gt_test_ratio=0.2)
     print(f'  Train: {len(X_train):,} locations '
           f'({int(y_train.sum()):,} fire, '
           f'{len(y_train) - int(y_train.sum()):,} no-fire)')
@@ -453,38 +620,42 @@ def main():
 
     # Step 4: Oversample
     print('\n--- Step 4: Oversampling fire class ---')
-    X_train_bal, y_train_bal = oversample_minority(X_train, y_train, ratio=1.0)
+    X_train_bal, y_train_bal, w_train_bal = oversample_minority(
+        X_train, y_train, w_train, ratio=1.0)
     print(f'  Balanced: {len(X_train_bal):,} locations '
           f'({int(y_train_bal.sum()):,} fire, '
           f'{len(y_train_bal) - int(y_train_bal.sum()):,} no-fire)')
+    print(f'  Weight range: [{w_train_bal.min():.3f}, {w_train_bal.max():.3f}], '
+          f'mean={w_train_bal.mean():.3f}')
 
-    # Step 5: Normalize
-    print('\n--- Step 5: Feature normalization ---')
-    train_mean = X_train.mean(axis=0)
-    train_std = X_train.std(axis=0)
-    # Prevent division by zero for constant features
-    train_std = np.where(train_std > 0, train_std, 1.0)
-    X_train_norm = (X_train_bal - train_mean) / train_std
-    X_test_norm = (X_test - train_mean) / train_std
-    # Replace any non-finite values after normalization
-    X_train_norm = np.where(np.isfinite(X_train_norm), X_train_norm, 0.0).astype(np.float32)
-    X_test_norm = np.where(np.isfinite(X_test_norm), X_test_norm, 0.0).astype(np.float32)
+    # Step 5: Normalize using sklearn StandardScaler on entire dataset
+    print('\n--- Step 5: Feature normalization (StandardScaler) ---')
+    # Fit scaler on ALL flights for consistent normalization
+    all_X = np.concatenate([ff['X'] for ff in flight_features.values()])
+    # Replace non-finite values before fitting scaler
+    all_X = np.where(np.isfinite(all_X), all_X, 0.0).astype(np.float32)
+    scaler = StandardScaler()
+    scaler.fit(all_X)
+
+    # Transform train and test sets
+    X_train_bal_clean = np.where(np.isfinite(X_train_bal), X_train_bal, 0.0).astype(np.float32)
+    X_test_clean = np.where(np.isfinite(X_test), X_test, 0.0).astype(np.float32)
+    X_train_norm = scaler.transform(X_train_bal_clean).astype(np.float32)
+    X_test_norm = scaler.transform(X_test_clean).astype(np.float32)
 
     for i, name in enumerate(FEATURE_NAMES):
-        print(f'  {name:12s}: mean={train_mean[i]:10.3f}, '
-              f'std={train_std[i]:10.3f}')
+        print(f'  {name:12s}: mean={scaler.mean_[i]:10.3f}, '
+              f'std={scaler.scale_[i]:10.3f}')
 
-    # Step 6: Train
-    print('\n--- Step 6: Training (BCE Loss, 300 epochs) ---')
+    # Step 6: Train with weighted BCE
+    print('\n--- Step 6: Training (Weighted BCE Loss, 300 epochs) ---')
     model, loss_history = train_model(
-        X_train_norm, y_train_bal, n_epochs=300, lr=1e-3)
+        X_train_norm, y_train_bal, w_train_bal, n_epochs=300, lr=1e-3)
 
     # Step 7: Evaluate
     print('\n--- Step 7: Evaluation ---')
-    X_train_orig_norm = (X_train - train_mean) / train_std
-    X_train_orig_norm = np.where(
-        np.isfinite(X_train_orig_norm), X_train_orig_norm, 0.0
-    ).astype(np.float32)
+    X_train_clean = np.where(np.isfinite(X_train), X_train, 0.0).astype(np.float32)
+    X_train_orig_norm = scaler.transform(X_train_clean).astype(np.float32)
 
     print('\n  Training set (flights 03+04+05):')
     train_metrics, _ = evaluate(model, X_train_orig_norm, y_train)
@@ -494,14 +665,15 @@ def main():
     test_metrics, test_probs = evaluate(model, X_test_norm, y_test)
     print_metrics(test_metrics)
 
-    # Step 8: Save model
+    # Step 8: Save model with scaler for inference
     print('\n--- Step 8: Saving model ---')
     os.makedirs('checkpoint', exist_ok=True)
     model_path = 'checkpoint/fire_detector.pt'
     torch.save({
         'model_state': model.state_dict(),
-        'mean': train_mean,
-        'std': train_std,
+        'mean': scaler.mean_,
+        'std': scaler.scale_,
+        'scaler': scaler,  # Save full scaler for sklearn compatibility
         'n_features': 8,
         'threshold': 0.5,
         'feature_names': FEATURE_NAMES,
@@ -518,18 +690,45 @@ def main():
     if len(fire_probs) > 0:
         plot_probability_hist(fire_probs, nofire_probs)
 
-    plot_prediction_map(
-        flight_features, model, train_mean, train_std, '24-801-06')
+    plot_prediction_map(flight_features, model, scaler, '24-801-06')
 
-    # Summary
+    # Summary with threshold vs ML comparison
     print('\n' + '=' * 60)
     print('Summary:')
     print(f'  Features:  {len(FEATURE_NAMES)} aggregate features')
     print(f'  Model:     8 \u2192 64 \u2192 32 \u2192 1 ({sum(p.numel() for p in model.parameters()):,} params)')
-    print(f'  Test TP:   {test_metrics["TP"]:,}')
-    print(f'  Test FP:   {test_metrics["FP"]:,}')
-    print(f'  Test FN:   {test_metrics["FN"]:,}')
-    print(f'  Checkpoint: {model_path}')
+
+    # Compute ML predictions on test set
+    ml_preds = (test_probs >= 0.5).astype(bool)
+    thresh_preds = (y_test >= 0.5).astype(bool)
+
+    # Comparison metrics
+    n_thresh_fire = int(thresh_preds.sum())
+    n_ml_fire = int(ml_preds.sum())
+    both_fire = int((ml_preds & thresh_preds).sum())
+    ml_only = int((ml_preds & ~thresh_preds).sum())
+    thresh_only = int((~ml_preds & thresh_preds).sum())
+    both_nofire = int((~ml_preds & ~thresh_preds).sum())
+
+    print('\n  Threshold vs ML Comparison (Test Set):')
+    print(f'    Threshold fire detections:  {n_thresh_fire:,}')
+    print(f'    ML fire detections:         {n_ml_fire:,}')
+    print(f'    Both agree (fire):          {both_fire:,}')
+    print(f'    Both agree (no fire):       {both_nofire:,}')
+    print(f'    ML only (thresh missed):    {ml_only:,}')
+    print(f'    Threshold only (ML missed): {thresh_only:,}')
+    agreement = 100.0 * (both_fire + both_nofire) / len(y_test)
+    print(f'    Agreement rate:             {agreement:.1f}%')
+
+    print('\n  ML Model Performance (vs threshold labels):')
+    print(f'    TP: {test_metrics["TP"]:,}  (ML + threshold both say fire)')
+    print(f'    TN: {test_metrics["TN"]:,}  (ML + threshold both say no fire)')
+    print(f'    FP: {test_metrics["FP"]:,}  (ML says fire, threshold says no)')
+    print(f'    FN: {test_metrics["FN"]:,}  (ML says no fire, threshold says fire)')
+    print(f'    Precision: {test_metrics["precision"]:.4f}')
+    print(f'    Recall:    {test_metrics["recall"]:.4f}')
+
+    print(f'\n  Checkpoint: {model_path}')
     print(f'  Dataset:    {dataset_path}')
     print(f'\n  To use in realtime_fire.py:')
     print(f'    Model auto-detected from {model_path}')

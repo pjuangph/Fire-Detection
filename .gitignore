@@ -210,3 +210,5 @@ __marimo__/
 ignite_fire_data/
 .DS_Store
 /plots
+dataset/fire_features.pkl.gz
+*.zip

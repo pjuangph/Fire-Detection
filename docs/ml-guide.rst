@@ -40,10 +40,10 @@ The ML fire detector is built on these explicit assumptions:
    features are set to 0.0 (neutral). The model learns to rely solely on
    T4, T11, and dT for nighttime pixels.
 
-6. **Train/test split by flight** -- spatial and temporal generalization
-   is ensured by training on flights 03, 04, 05 and testing on flight 06.
-   All flights cover the same geographic area but on different days and
-   with different fire activity.
+6. **Train/test split with ground truth in both** -- flight 03 (pre-burn,
+   no fire) is split 80/20 between train and test. Train: 80% of 03 + 04 + 05.
+   Test: 20% of 03 + 06. This ensures the test set has ground truth "no fire"
+   data for proper false positive evaluation.
 
 7. **Fire is rare (class imbalance)** -- fire pixels are a tiny fraction
    of all observations. Training data is balanced by oversampling the
@@ -119,19 +119,81 @@ Model Architecture
       sigmoid -> P(fire) in [0, 1]
 
 - **Parameters:** 2,465
-- **Loss:** BCEWithLogitsLoss (binary cross-entropy)
+- **Loss:** Pixel-wise weighted BCEWithLogitsLoss (see below)
 - **Optimizer:** Adam, lr = 0.001
 - **Epochs:** 300
 - **Batch size:** 4,096
-- **Normalization:** Global z-score from training set (mean/std saved
+- **Normalization:** Global z-score from all flights (mean/std saved
   with model checkpoint)
+
+
+Pixel-Wise Weighted BCE Loss
+----------------------------
+
+Standard BCE loss treats all pixels equally. For fire detection, some errors
+are worse than others:
+
+- **False positive on ground truth (flight 03):** Definitely wrong -- there
+  was no fire before the burn started.
+- **False negative on fire pixel:** Missed a real detection -- we want to
+  capture these.
+- **Error on uncertain pixel:** Ambiguous -- threshold detector may be wrong.
+
+We use pixel-wise weighted BCE loss to encode these priorities:
+
+.. math::
+
+   \mathcal{L} = \frac{1}{N} \sum_i w_i \cdot \text{BCE}(p_i, y_i)
+
+where the weight for each pixel combines **importance** and **inverse-frequency**:
+
+.. math::
+
+   w_i = \text{importance}_i \times \frac{N}{\text{category\_count}_i}
+
+Then normalized so :math:`\text{mean}(w) = 1` to keep gradient scale stable.
+
+**Weight assignment:**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 15 50
+
+   * - Category
+     - Importance
+     - Rationale
+   * - Flight 03 (ground truth no fire)
+     - 10.0
+     - FP here = definitely wrong, heavily penalize
+   * - Fire pixels in burn flights
+     - 5.0
+     - Confirmed fire, want to capture (penalize FN)
+   * - Non-fire in burn flights
+     - 1.0
+     - Uncertain, baseline importance
+
+**Why this works:**
+
+1. **Importance multiplier** (10, 5, 1): Encodes error severity
+2. **Inverse-frequency**: Small categories (rare fire pixels) contribute
+   proportionally despite being outnumbered
+3. **Normalization** (mean=1): Keeps gradient magnitudes stable during training
+
+**Expected outcome:**
+
+- FP on flight 03 approaches 0 (heavily penalized)
+- Recall on burn flights maintained (fire pixels have high weight)
+- Model learns: "If thermal signature is ambiguous, don't call it fire"
 
 
 Training Data
 -------------
 
-- **Train flights:** 03 (pre-burn, day), 04 (burn, day), 05 (burn, night)
-- **Test flight:** 06 (burn, day)
+- **Ground truth split:** Flight 03 (pre-burn, no fire) is split 80/20
+  between train and test. This ensures the test set has ground truth
+  "no fire" data for proper false positive evaluation.
+- **Train:** 80% of flight 03 + flights 04 (burn, day), 05 (burn, night)
+- **Test:** 20% of flight 03 + flight 06 (burn, day)
 - **Labels:** Pseudo-labels from threshold detector, aggregated per
   location (1 if any observation at that grid cell was fire)
 - **Balancing:** Fire class oversampled to 1:1 ratio

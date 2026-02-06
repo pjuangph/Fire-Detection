@@ -13,6 +13,7 @@ def detect_fire_simple(T4: np.ndarray, T11: np.ndarray,
                        T4_thresh: float = 325.0,
                        dT_thresh: float = 10.0) -> np.ndarray:
     """Simple absolute fire detection (no contextual test, for speed on mosaics).
+    Based on MODIS MOD14 / Giglio et al. approach.
 
     Args:
         T4: Brightness temperature at ~3.9 μm [K].
