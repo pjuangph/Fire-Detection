@@ -194,6 +194,8 @@ def train_model(
         Tuple of (model, loss_history).
     """
     device = get_device()
+    if not quiet:
+        print(f'  Device: {device}')
 
     model = FireMLP(hidden_layers=hidden_layers).to(device)
     use_error_rate = loss_fn == 'error-rate'
