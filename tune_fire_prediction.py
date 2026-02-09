@@ -184,14 +184,16 @@ def train_model(
     hidden_layers: list[int] | None = None,
     P_total: float | None = None,
     quiet: bool = False,
-) -> tuple[FireMLP, NDArrayFloat]:
+    resume_from: str | None = None,
+) -> tuple[FireMLP, NDArrayFloat, int]:
     """Train FireMLP with the selected loss function.
 
     Args:
         quiet: If True, suppress per-epoch progress bar.
+        resume_from: Checkpoint path to resume training from.
 
     Returns:
-        Tuple of (model, loss_history).
+        Tuple of (model, loss_history, total_epochs_completed).
     """
     device = get_device()
     if not quiet:
@@ -210,6 +212,23 @@ def train_model(
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs)
 
+    # Resume from checkpoint if provided
+    start_epoch = 0
+    if resume_from and os.path.isfile(resume_from):
+        ckpt = torch.load(resume_from, weights_only=False, map_location=device)
+        model.load_state_dict(ckpt['model_state'])
+        if 'optimizer_state' in ckpt:
+            optimizer.load_state_dict(ckpt['optimizer_state'])
+        if 'scheduler_state' in ckpt:
+            scheduler.load_state_dict(ckpt['scheduler_state'])
+        start_epoch = ckpt.get('epochs_completed', 0)
+        if not quiet:
+            print(f'  Resuming from epoch {start_epoch}/{n_epochs}')
+
+    if start_epoch >= n_epochs:
+        model = model.cpu()
+        return model, np.zeros((0, 1)), n_epochs
+
     X_t = torch.tensor(X_train, dtype=torch.float32)
     y_t = torch.tensor(y_train, dtype=torch.float32)
     w_t = torch.tensor(w_train, dtype=torch.float32)
@@ -218,9 +237,11 @@ def train_model(
     loader = torch.utils.data.DataLoader(
         dataset, batch_size=batch_size, shuffle=True)
 
-    loss_history = np.zeros((n_epochs, 1))
-    pbar = trange(n_epochs, desc=loss_label, disable=quiet)
-    for epoch in pbar:
+    remaining = n_epochs - start_epoch
+    loss_history = np.zeros((remaining, 1))
+    pbar = trange(remaining, desc=loss_label, disable=quiet)
+    for i in pbar:
+        epoch = start_epoch + i
         model.train()
         total_loss = 0.0
         for X_batch, y_batch, w_batch in loader:
@@ -240,13 +261,14 @@ def train_model(
 
         scheduler.step()
         avg_loss = total_loss / len(X_t)
-        loss_history[epoch] = avg_loss
+        loss_history[i] = avg_loss
         cur_lr = scheduler.get_last_lr()[0]
         if not quiet:
-            pbar.set_postfix({'loss': f'{avg_loss:.4e}', 'lr': f'{cur_lr:.1e}'})
+            pbar.set_postfix({'loss': f'{avg_loss:.4e}', 'lr': f'{cur_lr:.1e}',
+                              'ep': f'{epoch + 1}/{n_epochs}'})
 
     model = model.cpu()
-    return model, loss_history
+    return model, loss_history, n_epochs
 
 
 # ── Grid Search ──────────────────────────────────────────────
@@ -281,11 +303,68 @@ def build_combos(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     return combos
 
 
-def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures) -> list[dict[str, Any]]:
-    """Run all grid search combinations and return results."""
+def _combo_key(combo: dict[str, Any]) -> str:
+    """Build a unique string key for a hyperparameter combo."""
+    wc = combo['importance_weights']
+    return (f"{combo['loss']}|{combo['layers']}|{combo['learning_rate']}"
+            f"|{wc['gt']}/{wc['fire']}/{wc['other']}")
+
+
+def _load_existing_results(results_path: str) -> list[dict[str, Any]]:
+    """Load previously completed results from JSON (for restart)."""
+    if not os.path.isfile(results_path):
+        return []
+    with open(results_path) as f:
+        data = json.load(f)
+    return data.get('results', [])
+
+
+def _save_incremental(results: list[dict[str, Any]], cfg: dict[str, Any],
+                      config_path: str, results_path: str) -> None:
+    """Save results to JSON after each run (crash-safe)."""
+    os.makedirs(os.path.dirname(results_path) or '.', exist_ok=True)
+    metric = cfg.get('metric', 'error_rate')
+    output = {
+        'config': config_path,
+        'timestamp': datetime.now().isoformat(),
+        'metric': metric,
+        'results': results,
+    }
+    if results:
+        best = min(results, key=lambda r: r.get(metric, float('inf')))
+        output['best_run_id'] = best['run_id']
+        output[f'best_{metric}'] = best[metric]
+    with open(results_path, 'w') as f:
+        json.dump(output, f, indent=2)
+
+
+def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
+                    config_path: str = '',
+                    results_path: str = 'results/grid_search_results.json',
+                    ) -> list[dict[str, Any]]:
+    """Run all grid search combinations and return results.
+
+    Supports restart: loads existing results from results_path and skips
+    combos that already completed.
+    """
     combos = build_combos(cfg)
     epochs = cfg.get('epochs', 100)
     batch_size = cfg.get('batch_size', 4096)
+
+    # Load previously completed results (restart support)
+    existing_results = _load_existing_results(results_path)
+    completed_keys = set()
+    for r in existing_results:
+        key = _combo_key({
+            'loss': r['loss'], 'layers': r['layers'],
+            'learning_rate': r['learning_rate'],
+            'importance_weights': r['importance_weights'],
+        })
+        completed_keys.add(key)
+
+    if existing_results:
+        print(f'\n  Resuming: {len(existing_results)} runs already completed, '
+              f'{len(combos) - len(completed_keys)} remaining')
 
     # Fit scaler once on all data
     all_X = np.concatenate([ff['X'] for ff in flight_features.values()])
@@ -294,7 +373,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures) -> lis
     scaler.fit(all_X)
 
     os.makedirs('checkpoint', exist_ok=True)
-    results: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = list(existing_results)
     n_combos = len(combos)
 
     for i, combo in enumerate(combos):
@@ -304,6 +383,11 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures) -> lis
         lr = combo['learning_rate']
         wc = combo['importance_weights']
         use_error_rate = loss == 'error-rate'
+
+        # Skip already-completed runs
+        if _combo_key(combo) in completed_keys:
+            print(f'\n  Run {run_id}/{n_combos}: SKIPPED (already completed)')
+            continue
 
         arch_str = ' -> '.join(['12'] + [str(h) for h in layers] + ['1'])
         wt_str = f"gt={wc['gt']}, fire={wc['fire']}, other={wc['other']}"
@@ -340,12 +424,25 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures) -> lis
         X_test_clean = np.where(np.isfinite(X_test), X_test, 0.0).astype(np.float32)
         X_test_norm = scaler.transform(X_test_clean).astype(np.float32)
 
-        # Train
-        model, loss_history = train_model(
+        # Train (resume from checkpoint if under-trained)
+        resume_ckpt = None
+        existing_entry = None
+        ckpt_path = f'checkpoint/fire_detector_run_{run_id:02d}.pt'
+        for r in results:
+            if _combo_key({
+                'loss': r['loss'], 'layers': r['layers'],
+                'learning_rate': r['learning_rate'],
+                'importance_weights': r['importance_weights'],
+            }) == _combo_key(combo) and r.get('epochs', 0) < epochs:
+                resume_ckpt = r.get('checkpoint')
+                existing_entry = r
+                break
+
+        model, loss_history, total_epochs = train_model(
             X_norm, y_ready, w_ready,
             n_epochs=epochs, lr=lr, batch_size=batch_size,
             loss_fn=loss, hidden_layers=layers, P_total=P_original,
-            quiet=False)
+            quiet=False, resume_from=resume_ckpt)
 
         # Evaluate on original (non-oversampled) train data
         X_train_eval = np.where(np.isfinite(X_train), X_train, 0.0).astype(np.float32)
@@ -390,6 +487,9 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures) -> lis
             'checkpoint': ckpt_path,
         }
         results.append(result)
+
+        # Save after every run (crash-safe)
+        _save_incremental(results, cfg, config_path, results_path)
 
         # Print result summary
         print(f'  Train: TP={train_metrics["TP"]:,} FP={train_metrics["FP"]:,} '
@@ -489,33 +589,20 @@ def main() -> None:
     print(f'\nConfig: {config_path}')
     print(f'Runs: {len(combos)} | Epochs: {cfg.get("epochs", 100)} | Metric: {metric}')
 
-    # Run grid search
-    results = run_grid_search(cfg, flight_features)
+    # Run grid search (with restart support)
+    results_path = 'results/grid_search_results.json'
+    results = run_grid_search(cfg, flight_features,
+                              config_path=config_path,
+                              results_path=results_path)
 
     # Print summary table
     print_results_table(results, metric)
 
-    # Find best run
+    # Find best run and copy to best.pt
     best = min(results, key=lambda r: r.get(metric, float('inf')))
     best_ckpt = best['checkpoint']
-
-    # Copy best model to fire_detector_best.pt
     best_path = 'checkpoint/fire_detector_best.pt'
     shutil.copy2(best_ckpt, best_path)
-
-    # Save results JSON
-    os.makedirs('results', exist_ok=True)
-    output = {
-        'config': config_path,
-        'timestamp': datetime.now().isoformat(),
-        'metric': metric,
-        'results': results,
-        'best_run_id': best['run_id'],
-        f'best_{metric}': best[metric],
-    }
-    results_path = 'results/grid_search_results.json'
-    with open(results_path, 'w') as f:
-        json.dump(output, f, indent=2)
 
     # Summary
     wc = best['importance_weights']
