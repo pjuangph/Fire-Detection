@@ -12,21 +12,20 @@
             "console": "integratedTerminal"
         },
         {
-            "name": "Train Fire (BCE Loss)",
+            "name": "Grid Search",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/train_fire_prediction.py",
-            "args": ["--loss", "bce",
-                    "--layers", "64", "32", "16", "8"],
+            "program": "${workspaceFolder}/tune_fire_prediction.py",
+            "args": ["--config", "configs/grid_search.yaml"],
             "console": "integratedTerminal"
         },
         {
-            "name": "Train Fire (Error Rate Loss)",
+            "name": "Single Train (BCE)",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/train_fire_prediction.py",
-            "args": ["--loss", "error-rate",
-                    "--layers", "64", "32", "16", "8"],
+            "program": "${workspaceFolder}/tune_fire_prediction.py",
+            "args": ["--loss", "bce",
+                    "--layers", "64", "64", "64", "32"],
             "console": "integratedTerminal"
         },
         {

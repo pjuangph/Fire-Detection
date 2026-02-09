@@ -144,6 +144,7 @@ def _find_checkpoint(model_path: str | None = None) -> str | None:
     if model_path and os.path.isfile(model_path):
         return model_path
     for candidate in [
+        'checkpoint/fire_detector_best.pt',
         'checkpoint/fire_detector_bce.pt',
         'checkpoint/fire_detector_error-rate.pt',
         'checkpoint/fire_detector.pt',

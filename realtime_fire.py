@@ -34,6 +34,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from matplotlib.patches import Rectangle
 from lib import (
     group_files_by_flight,
     compute_ndvi, init_grid_state, process_sweep, get_fire_mask,
@@ -107,12 +108,28 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
                 vf_lons = lon_axis[0] + (lon_axis[-1] - lon_axis[0]) * vf_cols / max(len(lon_axis) - 1, 1)
                 ax.scatter(vf_lons, vf_lats, s=1.5, c='orange', alpha=0.9, zorder=6)
 
-        # Label top fire zones at their centroids
+        # Label top fire zones at their centroids with bounding boxes
         for zone_id, size in zone_sizes[:10]:
             zone_mask = labels == zone_id
             zr, zc = np.where(zone_mask)
             cy = lat_axis[0] + (lat_axis[-1] - lat_axis[0]) * zr.mean() / max(len(lat_axis) - 1, 1)
             cx = lon_axis[0] + (lon_axis[-1] - lon_axis[0]) * zc.mean() / max(len(lon_axis) - 1, 1)
+
+            # Bounding box around fire zone
+            r_min, r_max = zr.min(), zr.max()
+            c_min, c_max = zc.min(), zc.max()
+            lat_top = lat_axis[0] + (lat_axis[-1] - lat_axis[0]) * r_min / max(len(lat_axis) - 1, 1)
+            lat_bot = lat_axis[0] + (lat_axis[-1] - lat_axis[0]) * r_max / max(len(lat_axis) - 1, 1)
+            lon_left = lon_axis[0] + (lon_axis[-1] - lon_axis[0]) * c_min / max(len(lon_axis) - 1, 1)
+            lon_right = lon_axis[0] + (lon_axis[-1] - lon_axis[0]) * c_max / max(len(lon_axis) - 1, 1)
+            box_x = min(lon_left, lon_right)
+            box_y = min(lat_top, lat_bot)
+            box_w = abs(lon_right - lon_left)
+            box_h = abs(lat_bot - lat_top)
+            ax.add_patch(Rectangle(
+                (box_x, box_y), box_w, box_h,
+                linewidth=1.5, edgecolor='yellow', facecolor='none',
+                linestyle='--', zorder=8))
 
             area = size * cell_area_m2
             ax.annotate(
@@ -288,7 +305,7 @@ def main() -> None:
         ml_model = load_fire_model(args.model)
         if ml_model is None:
             print('ERROR: --detector ml requires a checkpoint '
-                  '(train with: python train_fire_prediction.py)',
+                  '(train with: python tune_fire_prediction.py)',
                   file=sys.stderr)
             sys.exit(1)
         print(f'Using ML fire detector')

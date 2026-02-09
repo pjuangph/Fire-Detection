@@ -40,6 +40,9 @@ def compute_pixel_weights(
     y: NDArrayFloat,
     flight_source: npt.NDArray[np.str_],
     ground_truth_flight: str = '24-801-03',
+    importance_gt: float = 10.0,
+    importance_fire: float = 5.0,
+    importance_other: float = 1.0,
 ) -> tuple[NDArrayFloat, WeightCounts]:
     """Compute normalized pixel-wise weights for loss function.
 
@@ -49,15 +52,13 @@ def compute_pixel_weights(
         w_i = importance_i x (N / category_count_i)
         w_normalized = w / mean(w)
 
-    Importance factors (empirically tuned for fire detection):
-        - Ground truth no-fire (flight 03): 10.0 -- FP here is definitely wrong
-        - Fire pixels in burn flights: 5.0 -- confirmed detections, high priority
-        - Non-fire in burn flights: 1.0 -- uncertain baseline
-
     Args:
         y: Labels array (0 = no fire, 1 = fire).
         flight_source: Array of flight IDs for each sample.
         ground_truth_flight: Flight ID with known no-fire ground truth.
+        importance_gt: FP penalty on ground truth flight. Default 10.0.
+        importance_fire: FN penalty on confirmed fire pixels. Default 5.0.
+        importance_other: Penalty on uncertain non-fire in burn flights. Default 1.0.
 
     Returns:
         Tuple of (weights, counts) where:
@@ -75,19 +76,14 @@ def compute_pixel_weights(
     n_fire = int(is_fire.sum())
     n_other = int(is_other.sum())
 
-    # Importance factors (how bad is an error on this category?)
-    IMPORTANCE_GT = 10.0      # FP on ground truth = definitely wrong
-    IMPORTANCE_FIRE = 5.0     # FN on fire = missed detection
-    IMPORTANCE_OTHER = 1.0    # Uncertain baseline
-
     # Weight = importance x inverse-frequency
     weights = np.ones(n_total, dtype=np.float32)
     if n_gt > 0:
-        weights[is_gt] = IMPORTANCE_GT * (n_total / n_gt)
+        weights[is_gt] = importance_gt * (n_total / n_gt)
     if n_fire > 0:
-        weights[is_fire] = IMPORTANCE_FIRE * (n_total / n_fire)
+        weights[is_fire] = importance_fire * (n_total / n_fire)
     if n_other > 0:
-        weights[is_other] = IMPORTANCE_OTHER * (n_total / n_other)
+        weights[is_other] = importance_other * (n_total / n_other)
 
     # Normalize to mean=1 (keeps gradient scale stable)
     weights = weights / weights.mean()

@@ -204,7 +204,7 @@ def main() -> None:
         model_paths = _discover_checkpoints()
         if not model_paths:
             print('No checkpoints found in checkpoint/fire_detector_*.pt')
-            print('Train a model first: python train_fire_prediction.py')
+            print('Train a model first: python tune_fire_prediction.py')
             return
 
     print(f'Found {len(model_paths)} model(s): {", ".join(model_paths)}')
