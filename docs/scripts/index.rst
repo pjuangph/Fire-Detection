@@ -11,5 +11,6 @@ Top-level scripts for running analyses and generating outputs.
    detect_fire
    plot_burn_locations
    plot_vegetation
-   fire_ml
+   tune_fire_prediction
+   compare_fire_detectors
    realtime_fire

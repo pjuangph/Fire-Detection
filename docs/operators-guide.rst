@@ -34,7 +34,8 @@ Quick Start
       python plot_burn_locations.py    # per-flight burn analysis
       python plot_vegetation.py        # NDVI vegetation maps (daytime)
       python detect_fire.py            # single-file fire detection
-      python fire_ml.py                # train ML fire detector
+      python tune_fire_prediction.py --config configs/grid_search.yaml  # grid search
+      python compare_fire_detectors.py  # compare ML vs threshold
 
 All output goes to the ``plots/`` directory.
 
@@ -106,9 +107,12 @@ What Each Script Produces
    * - ``detect_fire.py``
      - Single-file fire detection comparing pre-burn vs burn
      - ``plots/fire_detection_*.png``, ``plots/fire_map_burn.png``
-   * - ``fire_ml.py``
-     - Train MLP fire detector, produce prediction maps
-     - ``plots/ml_*.png``
+   * - ``tune_fire_prediction.py``
+     - YAML grid search for MLP fire detector
+     - ``results/grid_search_results.json``, ``checkpoint/fire_detector_best.pt``
+   * - ``compare_fire_detectors.py``
+     - Per-flight ML vs threshold comparison
+     - (stdout table)
 
 
 Reading the Outputs

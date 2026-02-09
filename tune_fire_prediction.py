@@ -20,255 +20,17 @@ from datetime import datetime
 from typing import Any
 
 import numpy as np
-import numpy.typing as npt
 import torch
-import torch.nn as nn
 import yaml
 from sklearn.preprocessing import StandardScaler
-from tqdm import trange
 
-from lib import group_files_by_flight, compute_grid_extent, build_pixel_table
-from lib.features import build_location_features
-from lib.losses import SoftErrorRateLoss, compute_pixel_weights
-from lib.inference import FireMLP, FEATURE_NAMES
-from lib.evaluation import get_device, evaluate, print_metrics
-
-# Type aliases
-NDArrayFloat = npt.NDArray[np.floating[Any]]
-FlightFeatures = dict[str, dict[str, Any]]
-
-
-# ── Data Pipeline ─────────────────────────────────────────────
-
-
-def load_all_data(
-    flights: dict[str, dict[str, Any]],
-) -> FlightFeatures:
-    """Build pixel tables for all flights and compute location features."""
-    flight_features: FlightFeatures = {}
-    for fnum, info in sorted(flights.items()):
-        files = info['files']
-        day_night = info['day_night']
-        print(f'  Flight {fnum} ({len(files)} files, {day_night})...')
-
-        lat_min, lat_max, lon_min, lon_max = compute_grid_extent(files)
-        pixel_df = build_pixel_table(
-            files, lat_min, lat_max, lon_min, lon_max,
-            day_night=day_night, flight_num=fnum)
-
-        n_pixels = len(pixel_df)
-        n_fire = int(pixel_df['fire'].sum())
-        print(f'    {n_pixels:,} observations, {n_fire:,} fire detections')
-
-        X, y, lats, lons = build_location_features(pixel_df)
-        n_locs = len(y)
-        n_fire_locs = int(y.sum())
-        print(f'    {n_locs:,} locations, {n_fire_locs:,} with fire')
-
-        flight_features[fnum] = {
-            'X': X, 'y': y, 'lats': lats, 'lons': lons,
-            'pixel_df': pixel_df, 'day_night': day_night,
-            'comment': info['comment'],
-        }
-    return flight_features
-
-
-def extract_train_test(
-    flight_features: FlightFeatures,
-    train_flights: list[str],
-    test_flights: list[str],
-    ground_truth_flight: str = '24-801-03',
-    gt_test_ratio: float = 0.2,
-    importance_gt: float = 10.0,
-    importance_fire: float = 5.0,
-    importance_other: float = 1.0,
-) -> tuple[NDArrayFloat, NDArrayFloat, NDArrayFloat, NDArrayFloat, NDArrayFloat, NDArrayFloat]:
-    """Split ground truth flight between train/test, then add burn flights.
-
-    Flight 03 (pre-burn, no fire) is split 80/20 between train/test.
-    Ground truth labels are forced to 0 (no real fire on pre-burn flight).
-    """
-    rng = np.random.default_rng(42)
-
-    # Split ground truth flight (03) 80/20
-    gt = flight_features[ground_truth_flight]
-    n_gt = len(gt['X'])
-    n_gt_test = int(n_gt * gt_test_ratio)
-    perm = rng.permutation(n_gt)
-    gt_test_idx = perm[:n_gt_test]
-    gt_train_idx = perm[n_gt_test:]
-
-    # Train: 80% of ground truth + burn flights
-    train_X = [gt['X'][gt_train_idx]]
-    train_y = [np.zeros(len(gt_train_idx), dtype=np.float32)]
-    train_flight_src = [np.full(len(gt_train_idx), ground_truth_flight)]
-    for f in train_flights:
-        if f != ground_truth_flight:
-            train_X.append(flight_features[f]['X'])
-            train_y.append(flight_features[f]['y'])
-            train_flight_src.append(np.full(len(flight_features[f]['y']), f))
-
-    # Test: 20% of ground truth + burn flights
-    test_X = [gt['X'][gt_test_idx]]
-    test_y = [np.zeros(len(gt_test_idx), dtype=np.float32)]
-    test_flight_src = [np.full(len(gt_test_idx), ground_truth_flight)]
-    for f in test_flights:
-        if f != ground_truth_flight:
-            test_X.append(flight_features[f]['X'])
-            test_y.append(flight_features[f]['y'])
-            test_flight_src.append(np.full(len(flight_features[f]['y']), f))
-
-    X_train = np.concatenate(train_X)
-    y_train = np.concatenate(train_y)
-    flight_src_train = np.concatenate(train_flight_src)
-
-    X_test = np.concatenate(test_X)
-    y_test = np.concatenate(test_y)
-    flight_src_test = np.concatenate(test_flight_src)
-
-    # Compute pixel-wise weights with configurable importance
-    w_train, _ = compute_pixel_weights(
-        y_train, flight_src_train, ground_truth_flight,
-        importance_gt=importance_gt,
-        importance_fire=importance_fire,
-        importance_other=importance_other)
-    w_test, _ = compute_pixel_weights(
-        y_test, flight_src_test, ground_truth_flight,
-        importance_gt=importance_gt,
-        importance_fire=importance_fire,
-        importance_other=importance_other)
-
-    return (X_train, y_train, w_train, X_test, y_test, w_test)
-
-
-def oversample_minority(
-    X: NDArrayFloat,
-    y: NDArrayFloat,
-    w: NDArrayFloat,
-    ratio: float = 1.0,
-) -> tuple[NDArrayFloat, NDArrayFloat, NDArrayFloat]:
-    """Oversample fire locations to balance training data, preserving weights."""
-    fire_mask = y == 1
-    n_fire = int(fire_mask.sum())
-    n_nofire = int((~fire_mask).sum())
-    if n_fire == 0 or n_fire >= n_nofire * ratio:
-        return X, y, w
-
-    target_fire = int(n_nofire * ratio)
-    rng = np.random.default_rng(42)
-    repeat_idx = rng.choice(
-        np.where(fire_mask)[0], target_fire - n_fire, replace=True)
-
-    X_bal = np.concatenate([X, X[repeat_idx]], axis=0)
-    y_bal = np.concatenate([y, y[repeat_idx]], axis=0)
-    w_bal = np.concatenate([w, w[repeat_idx]], axis=0)
-
-    # Re-normalize weights so mean=1 after oversampling
-    w_bal = w_bal / w_bal.mean()
-
-    perm = rng.permutation(len(X_bal))
-    return X_bal[perm], y_bal[perm], w_bal[perm]
-
-
-# ── Training ─────────────────────────────────────────────────
-
-
-def train_model(
-    X_train: NDArrayFloat,
-    y_train: NDArrayFloat,
-    w_train: NDArrayFloat,
-    n_epochs: int = 100,
-    lr: float = 1e-3,
-    batch_size: int = 4096,
-    loss_fn: str = 'bce',
-    hidden_layers: list[int] | None = None,
-    P_total: float | None = None,
-    quiet: bool = False,
-    resume_from: str | None = None,
-) -> tuple[FireMLP, NDArrayFloat, int]:
-    """Train FireMLP with the selected loss function.
-
-    Args:
-        quiet: If True, suppress per-epoch progress bar.
-        resume_from: Checkpoint path to resume training from.
-
-    Returns:
-        Tuple of (model, loss_history, total_epochs_completed).
-    """
-    device = get_device()
-    if not quiet:
-        print(f'  Device: {device}')
-
-    model = FireMLP(hidden_layers=hidden_layers).to(device)
-    use_error_rate = loss_fn == 'error-rate'
-    if use_error_rate:
-        if P_total is None:
-            P_total = float(y_train.sum())
-        criterion = SoftErrorRateLoss(P_total).to(device)
-        loss_label = f'Soft (FN+FP)/P, P={P_total:.0f}'
-    else:
-        criterion = nn.BCEWithLogitsLoss(reduction='none')
-        loss_label = 'Pixel Weighted BCE'
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs)
-
-    # Resume from checkpoint if provided
-    start_epoch = 0
-    if resume_from and os.path.isfile(resume_from):
-        ckpt = torch.load(resume_from, weights_only=False, map_location=device)
-        model.load_state_dict(ckpt['model_state'])
-        if 'optimizer_state' in ckpt:
-            optimizer.load_state_dict(ckpt['optimizer_state'])
-        if 'scheduler_state' in ckpt:
-            scheduler.load_state_dict(ckpt['scheduler_state'])
-        start_epoch = ckpt.get('epochs_completed', 0)
-        if not quiet:
-            print(f'  Resuming from epoch {start_epoch}/{n_epochs}')
-
-    if start_epoch >= n_epochs:
-        model = model.cpu()
-        return model, np.zeros((0, 1)), n_epochs
-
-    X_t = torch.tensor(X_train, dtype=torch.float32)
-    y_t = torch.tensor(y_train, dtype=torch.float32)
-    w_t = torch.tensor(w_train, dtype=torch.float32)
-
-    dataset = torch.utils.data.TensorDataset(X_t, y_t, w_t)
-    loader = torch.utils.data.DataLoader(
-        dataset, batch_size=batch_size, shuffle=True)
-
-    remaining = n_epochs - start_epoch
-    loss_history = np.zeros((remaining, 1))
-    pbar = trange(remaining, desc=loss_label, disable=quiet)
-    for i in pbar:
-        epoch = start_epoch + i
-        model.train()
-        total_loss = 0.0
-        for X_batch, y_batch, w_batch in loader:
-            X_batch = X_batch.to(device)
-            y_batch = y_batch.to(device)
-            w_batch = w_batch.to(device)
-            optimizer.zero_grad()
-            logits = model(X_batch)
-            if use_error_rate:
-                loss = criterion(logits, y_batch, w_batch)
-            else:
-                loss_per_sample = criterion(logits, y_batch)
-                loss = (loss_per_sample * w_batch).mean()
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item() * len(X_batch)
-
-        scheduler.step()
-        avg_loss = total_loss / len(X_t)
-        loss_history[i] = avg_loss
-        cur_lr = scheduler.get_last_lr()[0]
-        if not quiet:
-            pbar.set_postfix({'loss': f'{avg_loss:.4e}', 'lr': f'{cur_lr:.1e}',
-                              'ep': f'{epoch + 1}/{n_epochs}'})
-
-    model = model.cpu()
-    return model, loss_history, n_epochs
+from lib import group_files_by_flight
+from lib.inference import FEATURE_NAMES
+from lib.evaluation import evaluate
+from lib.training import (
+    load_all_data, extract_train_test, oversample_minority, train_model,
+    FlightFeatures,
+)
 
 
 # ── Grid Search ──────────────────────────────────────────────
@@ -344,8 +106,8 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
                     ) -> list[dict[str, Any]]:
     """Run all grid search combinations and return results.
 
-    Supports restart: loads existing results from results_path and skips
-    combos that already completed.
+    Supports restart: loads existing results from results_path, skips
+    fully-trained combos, and resumes under-trained ones.
     """
     combos = build_combos(cfg)
     epochs = cfg.get('epochs', 100)
@@ -353,18 +115,24 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
 
     # Load previously completed results (restart support)
     existing_results = _load_existing_results(results_path)
-    completed_keys = set()
+    # Index existing results by combo key for fast lookup
+    existing_by_key: dict[str, dict[str, Any]] = {}
     for r in existing_results:
         key = _combo_key({
             'loss': r['loss'], 'layers': r['layers'],
             'learning_rate': r['learning_rate'],
             'importance_weights': r['importance_weights'],
         })
-        completed_keys.add(key)
+        existing_by_key[key] = r
 
+    n_skip = sum(1 for r in existing_by_key.values()
+                 if r.get('epochs_completed', 0) >= epochs)
+    n_resume = sum(1 for r in existing_by_key.values()
+                   if 0 < r.get('epochs_completed', 0) < epochs)
     if existing_results:
-        print(f'\n  Resuming: {len(existing_results)} runs already completed, '
-              f'{len(combos) - len(completed_keys)} remaining')
+        print(f'\n  Restart: {n_skip} fully trained, '
+              f'{n_resume} under-trained (will resume), '
+              f'{len(combos) - len(existing_by_key)} new')
 
     # Fit scaler once on all data
     all_X = np.concatenate([ff['X'] for ff in flight_features.values()])
@@ -373,7 +141,11 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
     scaler.fit(all_X)
 
     os.makedirs('checkpoint', exist_ok=True)
-    results: list[dict[str, Any]] = list(existing_results)
+    # Start with existing results (fully trained ones kept, under-trained replaced)
+    results: list[dict[str, Any]] = [
+        r for r in existing_results
+        if r.get('epochs_completed', 0) >= epochs
+    ]
     n_combos = len(combos)
 
     for i, combo in enumerate(combos):
@@ -383,9 +155,11 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         lr = combo['learning_rate']
         wc = combo['importance_weights']
         use_error_rate = loss == 'error-rate'
+        key = _combo_key(combo)
 
-        # Skip already-completed runs
-        if _combo_key(combo) in completed_keys:
+        # Skip fully-trained runs
+        existing = existing_by_key.get(key)
+        if existing and existing.get('epochs_completed', 0) >= epochs:
             print(f'\n  Run {run_id}/{n_combos}: SKIPPED (already completed)')
             continue
 
@@ -394,6 +168,13 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         print(f'\n{"=" * 60}')
         print(f'Run {run_id}/{n_combos}: {loss}, {arch_str}, lr={lr}, weights=[{wt_str}]')
         print('=' * 60)
+
+        # Resume from under-trained checkpoint if available
+        resume_ckpt = None
+        if existing and existing.get('epochs_completed', 0) < epochs:
+            resume_ckpt = existing.get('checkpoint')
+            print(f'  Resuming under-trained run '
+                  f'({existing["epochs_completed"]}/{epochs} epochs)')
 
         # Build train/test with this combo's importance weights
         X_train, y_train, w_train, X_test, y_test, w_test = extract_train_test(
@@ -424,25 +205,16 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         X_test_clean = np.where(np.isfinite(X_test), X_test, 0.0).astype(np.float32)
         X_test_norm = scaler.transform(X_test_clean).astype(np.float32)
 
-        # Train (resume from checkpoint if under-trained)
-        resume_ckpt = None
-        existing_entry = None
-        ckpt_path = f'checkpoint/fire_detector_run_{run_id:02d}.pt'
-        for r in results:
-            if _combo_key({
-                'loss': r['loss'], 'layers': r['layers'],
-                'learning_rate': r['learning_rate'],
-                'importance_weights': r['importance_weights'],
-            }) == _combo_key(combo) and r.get('epochs', 0) < epochs:
-                resume_ckpt = r.get('checkpoint')
-                existing_entry = r
-                break
-
-        model, loss_history, total_epochs = train_model(
+        # Train
+        train_result = train_model(
             X_norm, y_ready, w_ready,
             n_epochs=epochs, lr=lr, batch_size=batch_size,
             loss_fn=loss, hidden_layers=layers, P_total=P_original,
             quiet=False, resume_from=resume_ckpt)
+
+        model = train_result['model']
+        loss_history = train_result['loss_history']
+        epochs_completed = train_result['epochs_completed']
 
         # Evaluate on original (non-oversampled) train data
         X_train_eval = np.where(np.isfinite(X_train), X_train, 0.0).astype(np.float32)
@@ -456,10 +228,13 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         test_P = test_metrics['TP'] + test_metrics['FN']
         error_rate = (test_metrics['FN'] + test_metrics['FP']) / max(test_P, 1)
 
-        # Save individual checkpoint
+        # Save checkpoint with full training state
         ckpt_path = f'checkpoint/fire_detector_run_{run_id:02d}.pt'
         torch.save({
             'model_state': model.state_dict(),
+            'optimizer_state': train_result['optimizer_state'],
+            'scheduler_state': train_result['scheduler_state'],
+            'epochs_completed': epochs_completed,
             'mean': scaler.mean_,
             'std': scaler.scale_,
             'scaler': scaler,
@@ -470,7 +245,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             'loss_fn': loss,
         }, ckpt_path)
 
-        final_loss = float(loss_history[-1, 0])
+        final_loss = float(loss_history[-1, 0]) if len(loss_history) > 0 else 0.0
 
         result = {
             'run_id': run_id,
@@ -478,6 +253,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             'layers': layers,
             'learning_rate': lr,
             'importance_weights': wc,
+            'epochs_completed': epochs_completed,
             'train': {k: (float(v) if isinstance(v, (int, float, np.integer, np.floating)) else v)
                       for k, v in train_metrics.items()},
             'test': {k: (float(v) if isinstance(v, (int, float, np.integer, np.floating)) else v)
@@ -505,7 +281,6 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
 
 def print_results_table(results: list[dict[str, Any]], metric: str) -> None:
     """Print sorted summary table of grid search results."""
-    # Sort by chosen metric (lower is better for error_rate)
     sorted_results = sorted(results, key=lambda r: r.get(metric, float('inf')))
 
     print(f'\n{"=" * 100}')
@@ -562,7 +337,6 @@ def main() -> None:
     flight_features = load_all_data(flights)
 
     if single_mode:
-        # Single run mode
         loss = args.loss or 'bce'
         layers = args.layers or [64, 32]
         lr = args.lr or 1e-3
