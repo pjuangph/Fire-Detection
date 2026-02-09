@@ -9,7 +9,7 @@
 # Grid size: BCE 3x3x3=27 + Error-rate 3x3=9 = 36 total runs.
 
 epochs: 200
-batch_size: 8192
+batch_size: 4096
 metric: error_rate          # minimize (FN+FP)/P on test set
 
 search_space:
