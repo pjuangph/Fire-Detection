@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 import numpy as np
@@ -154,13 +153,14 @@ def detect_fire_zones(fire_mask: np.ndarray) -> tuple[np.ndarray, int, list[tupl
 
 
 def compute_aggregate_features(gs: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
-    """Compute 8 aggregate features per pixel from grid state accumulators.
+    """Compute 12 aggregate features per pixel from grid state accumulators.
 
     Features: [T4_max, T4_mean, T11_mean, dT_max,
+               SWIR_max, SWIR_mean, Red_mean, NIR_mean,
                NDVI_min, NDVI_mean, NDVI_drop, obs_count]
 
     Returns:
-        features: (N, 8) float32 array for pixels with >=1 observation
+        features: (N, 12) float32 array for pixels with >=1 observation
         valid_mask: (nrows, ncols) bool — which pixels have features
     """
     obs = gs['obs_count']
@@ -173,6 +173,15 @@ def compute_aggregate_features(gs: dict[str, Any]) -> tuple[np.ndarray, np.ndarr
     T4_mean = (gs['T4_sum'][valid_mask] / obs_safe).astype(np.float32)
     T11_mean = (gs['T11_sum'][valid_mask] / obs_safe).astype(np.float32)
     dT_max = gs['dT_max'][valid_mask]
+
+    # SWIR features
+    SWIR_max_raw = gs['SWIR_max'][valid_mask]
+    SWIR_max = np.where(np.isinf(SWIR_max_raw), 0.0, SWIR_max_raw).astype(np.float32)
+    SWIR_mean = (gs['SWIR_sum'][valid_mask] / obs_safe).astype(np.float32)
+
+    # Red/NIR mean: implicit day/night indicator
+    Red_mean = (gs['Red_sum'][valid_mask] / obs_safe).astype(np.float32)
+    NIR_mean = (gs['NIR_sum'][valid_mask] / obs_safe).astype(np.float32)
 
     NDVI_min_raw = gs['NDVI_min'][valid_mask]
     NDVI_min = np.where(np.isinf(NDVI_min_raw), 0.0, NDVI_min_raw).astype(np.float32)
@@ -194,6 +203,8 @@ def compute_aggregate_features(gs: dict[str, Any]) -> tuple[np.ndarray, np.ndarr
 
     features = np.stack([
         T4_max, T4_mean, T11_mean, dT_max,
+        SWIR_max, SWIR_mean,
+        Red_mean, NIR_mean,
         NDVI_min, NDVI_mean, NDVI_drop, obs_count,
     ], axis=1).astype(np.float32)
 
@@ -203,77 +214,5 @@ def compute_aggregate_features(gs: dict[str, Any]) -> tuple[np.ndarray, np.ndarr
     return features, valid_mask
 
 
-class MLFireDetector:
-    """Wrapper for saved per-pixel MLP fire detector using aggregate features.
 
-    Loads a trained model from a checkpoint file and predicts fire from
-    the running accumulators stored in grid state (gs).
-    """
-
-    def __init__(self, model_path: str):
-        import torch
-        import torch.nn as nn
-
-        ckpt = torch.load(model_path, weights_only=False, map_location='cpu')
-        n = ckpt['n_features']
-        self.net = nn.Sequential(
-            nn.Linear(n, 64), nn.ReLU(),
-            nn.Linear(64, 32), nn.ReLU(),
-            nn.Linear(32, 1),
-        )
-        self.net.load_state_dict(ckpt['model_state'])
-        self.net.eval()
-        self.mean = ckpt['mean']
-        self.std = ckpt['std']
-        self.threshold = ckpt.get('threshold', 0.5)
-
-    def predict_from_gs(self, gs: dict[str, Any]) -> np.ndarray:
-        """Compute aggregate features from gs accumulators, run MLP.
-
-        Returns:
-            bool fire mask (nrows x ncols).
-        """
-        import torch
-
-        features, valid_mask = compute_aggregate_features(gs)
-        fire_mask = np.zeros((gs['nrows'], gs['ncols']), dtype=bool)
-
-        if features.shape[0] == 0:
-            return fire_mask
-
-        x = (features - self.mean) / self.std
-        x = np.where(np.isfinite(x), x, 0.0).astype(np.float32)
-
-        with torch.no_grad():
-            logits = self.net(torch.tensor(x))
-            probs = torch.sigmoid(logits).squeeze(-1).numpy()
-
-        fire_mask[valid_mask] = probs >= self.threshold
-        return fire_mask
-
-    def predict_proba_from_gs(self, gs: dict[str, Any]) -> np.ndarray:
-        """Return P(fire) grid (nrows x ncols), NaN where no data."""
-        import torch
-
-        features, valid_mask = compute_aggregate_features(gs)
-        prob_grid = np.full((gs['nrows'], gs['ncols']), np.nan, dtype=np.float32)
-
-        if features.shape[0] == 0:
-            return prob_grid
-
-        x = (features - self.mean) / self.std
-        x = np.where(np.isfinite(x), x, 0.0).astype(np.float32)
-
-        with torch.no_grad():
-            logits = self.net(torch.tensor(x))
-            probs = torch.sigmoid(logits).squeeze(-1).numpy()
-
-        prob_grid[valid_mask] = probs
-        return prob_grid
-
-
-def load_fire_model(model_path: str = 'checkpoint/fire_detector.pt') -> MLFireDetector | None:
-    """Load trained ML fire detector. Returns None if file not found."""
-    if not os.path.isfile(model_path):
-        return None
-    return MLFireDetector(model_path)
+# MLFireDetector and load_fire_model have moved to lib/inference.py

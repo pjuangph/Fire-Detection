@@ -1,177 +1,51 @@
-"""tune_fire_prediction.py - Train MLP fire detector with accumulated observations.
+"""tune_fire_prediction.py - YAML-driven grid search for fire detection MLP.
 
-Trains an MLP that predicts fire from 8 aggregate features computed across
-all observations of each pixel:
-
-  T4_max    — peak temperature (fire spike)
-  T4_mean   — average thermal state (normalizes the peak)
-  T11_mean  — background temperature (stable reference)
-  dT_max    — strongest T4-T11 difference (fire signature)
-  NDVI_min  — lowest vegetation (burn scar indicator)
-  NDVI_mean — average vegetation (normalizes the drop)
-  NDVI_drop — NDVI_first - NDVI_min (temporal vegetation loss)
-  obs_count — number of observations (reliability)
-
-These aggregate features normalize the data by putting each pixel in its
-own temporal context. The MLP learns patterns like: high T4_max vs T4_mean
-(thermal anomaly) + large NDVI_drop (vegetation loss) = fire.
-
-Loss: BCEWithLogitsLoss (binary cross-entropy) → sigmoid → P(fire).
-
-Train/test split by flight:
-    Train: flights 03 (pre-burn), 04 (day burn), 05 (night burn)
-    Test:  flight 06 (day burn, unseen)
+Iterates over combinations of loss function, architecture, learning rate,
+and importance weights. Results are saved to JSON. The best model is saved
+to checkpoint/fire_detector_best.pt for automatic discovery by inference.
 
 Usage:
-    python tune_fire_prediction.py
+    python tune_fire_prediction.py --config configs/grid_search.yaml
+    python tune_fire_prediction.py --loss bce --layers 64 64 64 32   # single run
 """
 
 from __future__ import annotations
 
+import argparse
+import itertools
+import json
 import os
-import pickle
-import gzip
+import shutil
+from datetime import datetime
+from typing import Any
 
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+import numpy.typing as npt
 import torch
 import torch.nn as nn
+import yaml
 from sklearn.preprocessing import StandardScaler
 from tqdm import trange
-from lib import (
-    group_files_by_flight, compute_grid_extent,
-    build_pixel_table, compute_location_stats,
-)
 
+from lib import group_files_by_flight, compute_grid_extent, build_pixel_table
+from lib.features import build_location_features
+from lib.losses import SoftErrorRateLoss, compute_pixel_weights
+from lib.inference import FireMLP, FEATURE_NAMES
+from lib.evaluation import get_device, evaluate, print_metrics
 
-# ── Feature Engineering ───────────────────────────────────────
-
-
-def build_location_features(pixel_df):
-    """Compute 8 aggregate features per grid-cell location from pixel table.
-
-    Groups by (lat, lon) and computes running statistics that mirror
-    what process_sweep() maintains in gs accumulators.
-
-    Args:
-        pixel_df: DataFrame from build_pixel_table() with columns
-                  lat, lon, T4, T11, dT, SWIR, NDVI, fire.
-
-    Returns:
-        X: (N_locations, 8) float32 features
-        y: (N_locations,) float32 labels (1 if any observation was fire)
-        lats, lons: (N_locations,) coordinate arrays
-    """
-    grouped = pixel_df.groupby(['lat', 'lon'])
-
-    T4_max = grouped['T4'].max().values
-    T4_mean = grouped['T4'].mean().values
-    T11_mean = grouped['T11'].mean().values
-    dT_max = grouped['dT'].max().values
-
-    # NDVI features: only from daytime (finite NDVI) observations
-    ndvi_min = grouped['NDVI'].min().values
-    ndvi_mean = grouped['NDVI'].mean().values
-
-    # NDVI_drop: first NDVI - min NDVI (vegetation loss over time)
-    def ndvi_drop_fn(g):
-        finite = g[np.isfinite(g)]
-        if len(finite) < 2:
-            return 0.0
-        return float(finite.iloc[0] - finite.min())
-    ndvi_drop = grouped['NDVI'].apply(ndvi_drop_fn).values
-
-    obs_count = grouped['T4'].count().values
-
-    # Label: 1 if any observation at this location was fire
-    fire_rate = grouped['fire'].mean().values
-    y = (fire_rate > 0).astype(np.float32)
-
-    # Fill NaN NDVI features with 0 (night-only pixels)
-    ndvi_min = np.where(np.isfinite(ndvi_min), ndvi_min, 0.0)
-    ndvi_mean = np.where(np.isfinite(ndvi_mean), ndvi_mean, 0.0)
-    ndvi_drop = np.where(np.isfinite(ndvi_drop), ndvi_drop, 0.0)
-
-    X = np.stack([
-        T4_max, T4_mean, T11_mean, dT_max,
-        ndvi_min, ndvi_mean, ndvi_drop, obs_count,
-    ], axis=1).astype(np.float32)
-
-    # Replace any remaining non-finite with 0
-    X = np.where(np.isfinite(X), X, 0.0).astype(np.float32)
-
-    coords = grouped['T4'].count().reset_index()
-    lats = coords['lat'].values
-    lons = coords['lon'].values
-
-    return X, y, lats, lons
-
-
-# ── Pixel-Wise Weighting ──────────────────────────────────────
-
-
-def compute_pixel_weights(y, flight_source, ground_truth_flight='24-801-03'):
-    """Compute normalized pixel-wise weights for BCE loss.
-
-    Weight = importance × inverse_frequency, then normalize to mean=1.
-
-    This ensures:
-    - Ground truth no-fire pixels (flight 03) are heavily penalized for FP
-    - Fire pixels in burn flights are prioritized for recall
-    - All categories contribute proportionally regardless of size
-
-    Args:
-        y: labels array (0 = no fire, 1 = fire)
-        flight_source: array of flight IDs for each sample
-        ground_truth_flight: flight ID with known no-fire ground truth
-
-    Returns:
-        weights: array same shape as y, normalized so mean=1
-    """
-    n_total = len(y)
-
-    # Identify categories
-    is_gt = flight_source == ground_truth_flight
-    is_fire = (y == 1) & ~is_gt
-    is_other = (y == 0) & ~is_gt
-
-    n_gt = int(is_gt.sum())
-    n_fire = int(is_fire.sum())
-    n_other = int(is_other.sum())
-
-    # Importance factors (how bad is an error on this category?)
-    IMPORTANCE_GT = 10.0      # FP on ground truth = definitely wrong
-    IMPORTANCE_FIRE = 5.0     # FN on fire = missed detection
-    IMPORTANCE_OTHER = 1.0    # Uncertain baseline
-
-    # Weight = importance × inverse-frequency
-    weights = np.ones(n_total, dtype=np.float32)
-    if n_gt > 0:
-        weights[is_gt] = IMPORTANCE_GT * (n_total / n_gt)
-    if n_fire > 0:
-        weights[is_fire] = IMPORTANCE_FIRE * (n_total / n_fire)
-    if n_other > 0:
-        weights[is_other] = IMPORTANCE_OTHER * (n_total / n_other)
-
-    # Normalize to mean=1 (keeps gradient scale stable)
-    weights = weights / weights.mean()
-
-    return weights, {'n_gt': n_gt, 'n_fire': n_fire, 'n_other': n_other}
+# Type aliases
+NDArrayFloat = npt.NDArray[np.floating[Any]]
+FlightFeatures = dict[str, dict[str, Any]]
 
 
 # ── Data Pipeline ─────────────────────────────────────────────
 
 
-def load_all_data(flights):
-    """Build pixel tables for all flights and compute location features.
-
-    Returns:
-        flight_features: {flight_num: {'X': arr, 'y': arr, 'lats': arr,
-                          'lons': arr, 'pixel_df': DataFrame}}
-    """
-    flight_features = {}
+def load_all_data(
+    flights: dict[str, dict[str, Any]],
+) -> FlightFeatures:
+    """Build pixel tables for all flights and compute location features."""
+    flight_features: FlightFeatures = {}
     for fnum, info in sorted(flights.items()):
         files = info['files']
         day_night = info['day_night']
@@ -199,24 +73,20 @@ def load_all_data(flights):
     return flight_features
 
 
-def extract_train_test(flight_features, train_flights, test_flights,
-                       ground_truth_flight='24-801-03', gt_test_ratio=0.2):
+def extract_train_test(
+    flight_features: FlightFeatures,
+    train_flights: list[str],
+    test_flights: list[str],
+    ground_truth_flight: str = '24-801-03',
+    gt_test_ratio: float = 0.2,
+    importance_gt: float = 10.0,
+    importance_fire: float = 5.0,
+    importance_other: float = 1.0,
+) -> tuple[NDArrayFloat, NDArrayFloat, NDArrayFloat, NDArrayFloat, NDArrayFloat, NDArrayFloat]:
     """Split ground truth flight between train/test, then add burn flights.
 
     Flight 03 (pre-burn, no fire) is split 80/20 between train/test.
-    This ensures test set has ground truth "no fire" data for proper FP evaluation.
-
-    Also computes pixel-wise weights using importance × inverse-frequency.
-
-    Args:
-        flight_features: dict from load_all_data()
-        train_flights: list of flight numbers for training (burn flights)
-        test_flights: list of flight numbers for testing (burn flights)
-        ground_truth_flight: flight with known no-fire ground truth
-        gt_test_ratio: fraction of ground truth to put in test set
-
-    Returns:
-        X_train, y_train, w_train, X_test, y_test, w_test
+    Ground truth labels are forced to 0 (no real fire on pre-burn flight).
     """
     rng = np.random.default_rng(42)
 
@@ -228,9 +98,9 @@ def extract_train_test(flight_features, train_flights, test_flights,
     gt_test_idx = perm[:n_gt_test]
     gt_train_idx = perm[n_gt_test:]
 
-    # Train: 80% of ground truth + burn flights from train_flights
+    # Train: 80% of ground truth + burn flights
     train_X = [gt['X'][gt_train_idx]]
-    train_y = [gt['y'][gt_train_idx]]
+    train_y = [np.zeros(len(gt_train_idx), dtype=np.float32)]
     train_flight_src = [np.full(len(gt_train_idx), ground_truth_flight)]
     for f in train_flights:
         if f != ground_truth_flight:
@@ -238,9 +108,9 @@ def extract_train_test(flight_features, train_flights, test_flights,
             train_y.append(flight_features[f]['y'])
             train_flight_src.append(np.full(len(flight_features[f]['y']), f))
 
-    # Test: 20% of ground truth + burn flights from test_flights
+    # Test: 20% of ground truth + burn flights
     test_X = [gt['X'][gt_test_idx]]
-    test_y = [gt['y'][gt_test_idx]]
+    test_y = [np.zeros(len(gt_test_idx), dtype=np.float32)]
     test_flight_src = [np.full(len(gt_test_idx), ground_truth_flight)]
     for f in test_flights:
         if f != ground_truth_flight:
@@ -256,34 +126,28 @@ def extract_train_test(flight_features, train_flights, test_flights,
     y_test = np.concatenate(test_y)
     flight_src_test = np.concatenate(test_flight_src)
 
-    # Compute pixel-wise weights
-    w_train, train_counts = compute_pixel_weights(
-        y_train, flight_src_train, ground_truth_flight)
-    w_test, test_counts = compute_pixel_weights(
-        y_test, flight_src_test, ground_truth_flight)
-
-    print(f'  Train weights: gt={train_counts["n_gt"]:,}, '
-          f'fire={train_counts["n_fire"]:,}, other={train_counts["n_other"]:,}')
-    print(f'  Test weights:  gt={test_counts["n_gt"]:,}, '
-          f'fire={test_counts["n_fire"]:,}, other={test_counts["n_other"]:,}')
+    # Compute pixel-wise weights with configurable importance
+    w_train, _ = compute_pixel_weights(
+        y_train, flight_src_train, ground_truth_flight,
+        importance_gt=importance_gt,
+        importance_fire=importance_fire,
+        importance_other=importance_other)
+    w_test, _ = compute_pixel_weights(
+        y_test, flight_src_test, ground_truth_flight,
+        importance_gt=importance_gt,
+        importance_fire=importance_fire,
+        importance_other=importance_other)
 
     return (X_train, y_train, w_train, X_test, y_test, w_test)
 
 
-def oversample_minority(X, y, w, ratio=1.0):
-    """Oversample fire locations to balance training data, preserving weights.
-
-    After oversampling, weights are re-normalized so mean=1.
-
-    Args:
-        X: feature array
-        y: label array
-        w: weight array (pixel-wise weights)
-        ratio: target fire:no-fire ratio
-
-    Returns:
-        X_bal, y_bal, w_bal: balanced arrays with shuffled order
-    """
+def oversample_minority(
+    X: NDArrayFloat,
+    y: NDArrayFloat,
+    w: NDArrayFloat,
+    ratio: float = 1.0,
+) -> tuple[NDArrayFloat, NDArrayFloat, NDArrayFloat]:
+    """Oversample fire locations to balance training data, preserving weights."""
     fire_mask = y == 1
     n_fire = int(fire_mask.sum())
     n_nofire = int((~fire_mask).sum())
@@ -306,76 +170,45 @@ def oversample_minority(X, y, w, ratio=1.0):
     return X_bal[perm], y_bal[perm], w_bal[perm]
 
 
-# ── Model ─────────────────────────────────────────────────────
+# ── Training ─────────────────────────────────────────────────
 
 
-FEATURE_NAMES = [
-    'T4_max', 'T4_mean', 'T11_mean', 'dT_max',
-    'NDVI_min', 'NDVI_mean', 'NDVI_drop', 'obs_count',
-]
-
-
-class FireMLP(nn.Module):
-    """MLP fire detector from aggregate features.
-
-    Architecture: 8 → 64 → 32 → 1 (2,465 parameters).
-    """
-
-    def __init__(self, n_features=8, hidden1=64, hidden2=32):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(n_features, hidden1),
-            nn.ReLU(),
-            nn.Linear(hidden1, hidden2),
-            nn.ReLU(),
-            nn.Linear(hidden2, 1),
-        )
-
-    def forward(self, x):
-        return self.net(x).squeeze(-1)
-
-
-# ── Training ──────────────────────────────────────────────────
-
-
-def get_device():
-    """Get best available device: MPS (Mac), CUDA (NVIDIA), or CPU."""
-    if torch.backends.mps.is_available():
-        return torch.device('mps')
-    elif torch.cuda.is_available():
-        return torch.device('cuda')
-    return torch.device('cpu')
-
-
-def train_model(X_train, y_train, w_train, n_epochs=300, lr=1e-3, batch_size=1024):
-    """Train FireMLP with pixel-wise weighted BCEWithLogitsLoss.
-
-    Uses MPS on Mac, CUDA on NVIDIA, or CPU as fallback.
-
-    The loss for each sample is weighted by w_train, which encodes:
-    - Ground truth no-fire pixels: high weight (penalize FP heavily)
-    - Fire pixels in burn flights: medium-high weight (capture real fires)
-    - Other pixels: baseline weight
+def train_model(
+    X_train: NDArrayFloat,
+    y_train: NDArrayFloat,
+    w_train: NDArrayFloat,
+    n_epochs: int = 100,
+    lr: float = 1e-3,
+    batch_size: int = 4096,
+    loss_fn: str = 'bce',
+    hidden_layers: list[int] | None = None,
+    P_total: float | None = None,
+    quiet: bool = False,
+) -> tuple[FireMLP, NDArrayFloat]:
+    """Train FireMLP with the selected loss function.
 
     Args:
-        X_train: normalized feature array (N, 8)
-        y_train: label array (N,)
-        w_train: pixel-wise weights (N,), normalized so mean=1
-        n_epochs: number of training epochs
-        lr: learning rate
-        batch_size: batch size for training
+        quiet: If True, suppress per-epoch progress bar.
 
     Returns:
-        model: trained FireMLP (moved back to CPU)
-        loss_history: list of per-epoch average loss values
+        Tuple of (model, loss_history).
     """
     device = get_device()
-    print(f'  Using device: {device}')
+    if not quiet:
+        print(f'  Device: {device}')
 
-    model = FireMLP().to(device)
-    # Use reduction='none' so we can apply per-sample weights
-    criterion = nn.BCEWithLogitsLoss(reduction='none')
+    model = FireMLP(hidden_layers=hidden_layers).to(device)
+    use_error_rate = loss_fn == 'error-rate'
+    if use_error_rate:
+        if P_total is None:
+            P_total = float(y_train.sum())
+        criterion = SoftErrorRateLoss(P_total).to(device)
+        loss_label = f'Soft (FN+FP)/P, P={P_total:.0f}'
+    else:
+        criterion = nn.BCEWithLogitsLoss(reduction='none')
+        loss_label = 'Pixel Weighted BCE'
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs)
 
     X_t = torch.tensor(X_train, dtype=torch.float32)
     y_t = torch.tensor(y_train, dtype=torch.float32)
@@ -384,10 +217,10 @@ def train_model(X_train, y_train, w_train, n_epochs=300, lr=1e-3, batch_size=102
     dataset = torch.utils.data.TensorDataset(X_t, y_t, w_t)
     loader = torch.utils.data.DataLoader(
         dataset, batch_size=batch_size, shuffle=True)
-    avg_loss = 1000
 
     loss_history = np.zeros((n_epochs, 1))
-    for epoch in trange(n_epochs, desc=f"Training Model, Weighted BCE"):
+    pbar = trange(n_epochs, desc=loss_label, disable=quiet)
+    for epoch in pbar:
         model.train()
         total_loss = 0.0
         for X_batch, y_batch, w_batch in loader:
@@ -396,342 +229,312 @@ def train_model(X_train, y_train, w_train, n_epochs=300, lr=1e-3, batch_size=102
             w_batch = w_batch.to(device)
             optimizer.zero_grad()
             logits = model(X_batch)
-            # Per-sample loss, then apply weights
-            loss_per_sample = criterion(logits, y_batch)
-            loss = (loss_per_sample * w_batch).mean()
+            if use_error_rate:
+                loss = criterion(logits, y_batch, w_batch)
+            else:
+                loss_per_sample = criterion(logits, y_batch)
+                loss = (loss_per_sample * w_batch).mean()
             loss.backward()
             optimizer.step()
             total_loss += loss.item() * len(X_batch)
 
+        scheduler.step()
         avg_loss = total_loss / len(X_t)
         loss_history[epoch] = avg_loss
+        cur_lr = scheduler.get_last_lr()[0]
+        if not quiet:
+            pbar.set_postfix({'loss': f'{avg_loss:.4e}', 'lr': f'{cur_lr:.1e}'})
 
-    # Move model back to CPU for saving and inference
     model = model.cpu()
     return model, loss_history
 
 
-# ── Evaluation ────────────────────────────────────────────────
+# ── Grid Search ──────────────────────────────────────────────
 
 
-def evaluate(model, X, y, threshold=0.5):
-    """Evaluate with absolute count metrics."""
-    model.eval()
-    with torch.no_grad():
-        logits = model(torch.tensor(X, dtype=torch.float32))
-        probs = torch.sigmoid(logits).numpy()
+def build_combos(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    """Generate all hyperparameter combinations from YAML config."""
+    space = cfg['search_space']
+    losses = space['loss']
+    layers_list = space['layers']
+    lrs = space['learning_rate']
+    weight_configs = space.get('importance_weights', [{'gt': 10, 'fire': 5, 'other': 1}])
 
-    preds = (probs >= threshold).astype(np.float32)
-
-    TP = int(np.sum((preds == 1) & (y == 1)))
-    FP = int(np.sum((preds == 1) & (y == 0)))
-    FN = int(np.sum((preds == 0) & (y == 1)))
-    TN = int(np.sum((preds == 0) & (y == 0)))
-
-    precision = TP / max(TP + FP, 1)
-    recall = TP / max(TP + FN, 1)
-
-    return {
-        'TP': TP, 'FP': FP, 'FN': FN, 'TN': TN,
-        'precision': precision, 'recall': recall,
-    }, probs
-
-
-def print_metrics(metrics, label=''):
-    """Print evaluation metrics."""
-    m = metrics
-    header = f'  {label} ' if label else '  '
-    print(f'{header}Absolute counts:')
-    print(f'    TP (correct fire):     {m["TP"]:>8,}')
-    print(f'    FP (false alarm):      {m["FP"]:>8,}')
-    print(f'    FN (missed fire):      {m["FN"]:>8,}')
-    print(f'    TN (correct no-fire):  {m["TN"]:>8,}')
-    print(f'{header}Rates:')
-    print(f'    Precision: {m["precision"]:.4f}')
-    print(f'    Recall:    {m["recall"]:.4f}')
+    combos: list[dict[str, Any]] = []
+    for loss, layers, lr in itertools.product(losses, layers_list, lrs):
+        if loss == 'error-rate':
+            # Error-rate uses uniform weights; only 1 weight combo needed
+            combos.append({
+                'loss': loss,
+                'layers': list(layers),
+                'learning_rate': lr,
+                'importance_weights': {'gt': 10, 'fire': 5, 'other': 1},
+            })
+        else:
+            for wc in weight_configs:
+                combos.append({
+                    'loss': loss,
+                    'layers': list(layers),
+                    'learning_rate': lr,
+                    'importance_weights': dict(wc),
+                })
+    return combos
 
 
-# ── Visualization ─────────────────────────────────────────────
+def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures) -> list[dict[str, Any]]:
+    """Run all grid search combinations and return results."""
+    combos = build_combos(cfg)
+    epochs = cfg.get('epochs', 100)
+    batch_size = cfg.get('batch_size', 4096)
+
+    # Fit scaler once on all data
+    all_X = np.concatenate([ff['X'] for ff in flight_features.values()])
+    all_X = np.where(np.isfinite(all_X), all_X, 0.0).astype(np.float32)
+    scaler = StandardScaler()
+    scaler.fit(all_X)
+
+    os.makedirs('checkpoint', exist_ok=True)
+    results: list[dict[str, Any]] = []
+    n_combos = len(combos)
+
+    for i, combo in enumerate(combos):
+        run_id = i + 1
+        loss = combo['loss']
+        layers = combo['layers']
+        lr = combo['learning_rate']
+        wc = combo['importance_weights']
+        use_error_rate = loss == 'error-rate'
+
+        arch_str = ' -> '.join(['12'] + [str(h) for h in layers] + ['1'])
+        wt_str = f"gt={wc['gt']}, fire={wc['fire']}, other={wc['other']}"
+        print(f'\n{"=" * 60}')
+        print(f'Run {run_id}/{n_combos}: {loss}, {arch_str}, lr={lr}, weights=[{wt_str}]')
+        print('=' * 60)
+
+        # Build train/test with this combo's importance weights
+        X_train, y_train, w_train, X_test, y_test, w_test = extract_train_test(
+            flight_features,
+            train_flights=['24-801-04', '24-801-05'],
+            test_flights=['24-801-06'],
+            ground_truth_flight='24-801-03',
+            gt_test_ratio=0.2,
+            importance_gt=float(wc['gt']),
+            importance_fire=float(wc['fire']),
+            importance_other=float(wc['other']),
+        )
+
+        # Capture P_total before oversampling
+        P_original = float(y_train.sum())
+
+        # Oversample to 50/50 balance
+        X_ready, y_ready, w_ready = oversample_minority(X_train, y_train, w_train)
+
+        # For error-rate: uniform weights
+        if use_error_rate:
+            w_ready = np.ones_like(w_ready)
+
+        # Normalize
+        X_clean = np.where(np.isfinite(X_ready), X_ready, 0.0).astype(np.float32)
+        X_norm = scaler.transform(X_clean).astype(np.float32)
+
+        X_test_clean = np.where(np.isfinite(X_test), X_test, 0.0).astype(np.float32)
+        X_test_norm = scaler.transform(X_test_clean).astype(np.float32)
+
+        # Train
+        model, loss_history = train_model(
+            X_norm, y_ready, w_ready,
+            n_epochs=epochs, lr=lr, batch_size=batch_size,
+            loss_fn=loss, hidden_layers=layers, P_total=P_original,
+            quiet=False)
+
+        # Evaluate on original (non-oversampled) train data
+        X_train_eval = np.where(np.isfinite(X_train), X_train, 0.0).astype(np.float32)
+        X_train_norm = scaler.transform(X_train_eval).astype(np.float32)
+        train_metrics, _ = evaluate(model, X_train_norm, y_train)
+
+        # Evaluate on test
+        test_metrics, _ = evaluate(model, X_test_norm, y_test)
+
+        # Error rate: (FN+FP)/P
+        test_P = test_metrics['TP'] + test_metrics['FN']
+        error_rate = (test_metrics['FN'] + test_metrics['FP']) / max(test_P, 1)
+
+        # Save individual checkpoint
+        ckpt_path = f'checkpoint/fire_detector_run_{run_id:02d}.pt'
+        torch.save({
+            'model_state': model.state_dict(),
+            'mean': scaler.mean_,
+            'std': scaler.scale_,
+            'scaler': scaler,
+            'n_features': 12,
+            'hidden_layers': model.hidden_layers,
+            'threshold': 0.5,
+            'feature_names': FEATURE_NAMES,
+            'loss_fn': loss,
+        }, ckpt_path)
+
+        final_loss = float(loss_history[-1, 0])
+
+        result = {
+            'run_id': run_id,
+            'loss': loss,
+            'layers': layers,
+            'learning_rate': lr,
+            'importance_weights': wc,
+            'train': {k: (float(v) if isinstance(v, (int, float, np.integer, np.floating)) else v)
+                      for k, v in train_metrics.items()},
+            'test': {k: (float(v) if isinstance(v, (int, float, np.integer, np.floating)) else v)
+                     for k, v in test_metrics.items()},
+            'error_rate': float(error_rate),
+            'final_loss': final_loss,
+            'checkpoint': ckpt_path,
+        }
+        results.append(result)
+
+        # Print result summary
+        print(f'  Train: TP={train_metrics["TP"]:,} FP={train_metrics["FP"]:,} '
+              f'FN={train_metrics["FN"]:,} TN={train_metrics["TN"]:,}')
+        print(f'  Test:  TP={test_metrics["TP"]:,} FP={test_metrics["FP"]:,} '
+              f'FN={test_metrics["FN"]:,} TN={test_metrics["TN"]:,}')
+        print(f'  Precision={test_metrics["precision"]:.4f} '
+              f'Recall={test_metrics["recall"]:.4f} '
+              f'Error rate={error_rate:.4f}')
+
+    return results
 
 
-def plot_training_loss(loss_history):
-    """Plot BCE training loss curve."""
-    fig, ax = plt.subplots(figsize=(8, 5))
-    epochs = range(1, len(loss_history) + 1)
-    ax.plot(epochs, loss_history, 'b-', linewidth=1.5, label='BCE Loss')
-    ax.set_xlabel('Epoch')
-    ax.set_ylabel('Loss')
-    ax.set_title('Training Convergence \u2014 BCE Loss (Aggregate Features)')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+def print_results_table(results: list[dict[str, Any]], metric: str) -> None:
+    """Print sorted summary table of grid search results."""
+    # Sort by chosen metric (lower is better for error_rate)
+    sorted_results = sorted(results, key=lambda r: r.get(metric, float('inf')))
 
-    plt.tight_layout()
-    os.makedirs('plots', exist_ok=True)
-    plt.savefig('plots/tune_training_loss.png', dpi=150, bbox_inches='tight')
-    print('  Saved plots/tune_training_loss.png')
-    plt.close()
+    print(f'\n{"=" * 100}')
+    print(f'Grid Search Results (sorted by {metric}, best first)')
+    print('=' * 100)
 
+    header = (f'  {"Run":>3s}  {"Loss":<10s}  {"Layers":<18s}  {"LR":>8s}  '
+              f'{"Weights":<16s}  {"TP":>6s}  {"FP":>5s}  {"FN":>5s}  '
+              f'{"Prec":>6s}  {"Rec":>6s}  {"ErrRate":>7s}')
+    print(header)
+    print('  ' + '-' * (len(header) - 2))
 
-def plot_probability_hist(probs_fire, probs_nofire):
-    """Plot P(fire) histogram for fire vs non-fire locations."""
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.hist(probs_nofire, bins=50, alpha=0.6, label='No fire', color='gray',
-            density=True)
-    ax.hist(probs_fire, bins=50, alpha=0.6, label='Fire', color='red',
-            density=True)
-    ax.axvline(0.5, color='black', linestyle='--', linewidth=1.5,
-               label='Threshold (0.5)')
-    ax.set_xlabel('P(fire)')
-    ax.set_ylabel('Density')
-    ax.set_title('Fire Probability Distribution (Test Set)')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig('plots/tune_probability_hist.png', dpi=150, bbox_inches='tight')
-    print('  Saved plots/tune_probability_hist.png')
-    plt.close()
-
-
-def plot_prediction_map(flight_features, model, scaler, flight_num):
-    """Plot spatial fire predictions for one flight.
-
-    2x2: ML pred, threshold pred, agreement, P(fire) heatmap.
-    """
-    d = flight_features[flight_num]
-    X, y = d['X'], d['y']
-    lats, lons = d['lats'], d['lons']
-
-    X_clean = np.where(np.isfinite(X), X, 0.0).astype(np.float32)
-    X_norm = scaler.transform(X_clean).astype(np.float32)
-
-    model.eval()
-    with torch.no_grad():
-        logits = model(torch.tensor(X_norm))
-        probs = torch.sigmoid(logits).numpy()
-
-    ml_fire = probs >= 0.5
-    thresh_fire = y > 0.5
-
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    fig.suptitle(
-        f'ML vs Threshold \u2014 Flight {flight_num} ({d["comment"]})',
-        fontsize=14, fontweight='bold')
-
-    # Top-left: ML predictions
-    ax = axes[0, 0]
-    ax.scatter(lons[~ml_fire], lats[~ml_fire], s=0.1, c='gray', alpha=0.2)
-    if ml_fire.any():
-        ax.scatter(lons[ml_fire], lats[ml_fire], s=1, c='red', alpha=0.7)
-    ax.set_title(f'ML Predictions ({int(ml_fire.sum()):,} fire locations)')
-    ax.set_ylabel('Latitude')
-    ax.set_xlabel('Longitude')
-
-    # Top-right: Threshold labels
-    ax = axes[0, 1]
-    ax.scatter(lons[~thresh_fire], lats[~thresh_fire], s=0.1, c='gray',
-               alpha=0.2)
-    if thresh_fire.any():
-        ax.scatter(lons[thresh_fire], lats[thresh_fire], s=1, c='red',
-                   alpha=0.7)
-    ax.set_title(f'Threshold Labels ({int(thresh_fire.sum()):,} fire locations)')
-    ax.set_ylabel('Latitude')
-    ax.set_xlabel('Longitude')
-
-    # Bottom-left: Agreement
-    ax = axes[1, 0]
-    both = ml_fire & thresh_fire
-    ml_only = ml_fire & ~thresh_fire
-    thresh_only = ~ml_fire & thresh_fire
-    neither = ~ml_fire & ~thresh_fire
-    ax.scatter(lons[neither], lats[neither], s=0.1, c='gray', alpha=0.1)
-    if both.any():
-        ax.scatter(lons[both], lats[both], s=1.5, c='green', alpha=0.7,
-                   label=f'Both ({int(both.sum()):,})')
-    if ml_only.any():
-        ax.scatter(lons[ml_only], lats[ml_only], s=1.5, c='blue', alpha=0.7,
-                   label=f'ML only ({int(ml_only.sum()):,})')
-    if thresh_only.any():
-        ax.scatter(lons[thresh_only], lats[thresh_only], s=1.5, c='orange',
-                   alpha=0.7, label=f'Thresh only ({int(thresh_only.sum()):,})')
-    ax.set_title('Agreement')
-    ax.legend(fontsize=9, markerscale=5)
-    ax.set_ylabel('Latitude')
-    ax.set_xlabel('Longitude')
-
-    # Bottom-right: P(fire) heatmap
-    ax = axes[1, 1]
-    sc = ax.scatter(lons, lats, s=0.5, c=probs, cmap='hot', vmin=0, vmax=1,
-                    alpha=0.7)
-    plt.colorbar(sc, ax=ax, label='P(fire)')
-    ax.set_title('ML Fire Probability')
-    ax.set_ylabel('Latitude')
-    ax.set_xlabel('Longitude')
-
-    plt.tight_layout()
-    outname = f'plots/tune_prediction_map_{flight_num.replace("-", "")}.png'
-    plt.savefig(outname, dpi=200, bbox_inches='tight')
-    print(f'  Saved {outname}')
-    plt.close()
+    for r in sorted_results:
+        wc = r['importance_weights']
+        wt_str = f"{wc['gt']}/{wc['fire']}/{wc['other']}"
+        layers_str = 'x'.join(str(h) for h in r['layers'])
+        t = r['test']
+        print(f'  {r["run_id"]:>3d}  {r["loss"]:<10s}  {layers_str:<18s}  '
+              f'{r["learning_rate"]:>8.4f}  {wt_str:<16s}  '
+              f'{t["TP"]:>6.0f}  {t["FP"]:>5.0f}  {t["FN"]:>5.0f}  '
+              f'{t["precision"]:>6.4f}  {t["recall"]:>6.4f}  '
+              f'{r["error_rate"]:>7.4f}')
 
 
 # ── Main ──────────────────────────────────────────────────────
 
 
-def main():
-    print('=' * 60)
-    print('ML Fire Detection — Accumulated Observation Features')
-    print('=' * 60)
+def main() -> None:
+    """Run grid search or single training run."""
+    parser = argparse.ArgumentParser(
+        description='Tune MLP fire detector via YAML grid search')
+    parser.add_argument(
+        '--config', type=str, default=None,
+        help='Path to YAML grid search config (default: configs/grid_search.yaml)')
 
-    # Step 1: Load flight data
-    print('\n--- Step 1: Building per-location datasets ---')
+    # Single-run mode (e.g. --loss bce --layers 64 64 64 32)
+    parser.add_argument('--loss', choices=['bce', 'error-rate'], default=None)
+    parser.add_argument('--layers', type=int, nargs='+', default=None)
+    parser.add_argument('--lr', type=float, default=None)
+    parser.add_argument('--epochs', type=int, default=100)
+    args = parser.parse_args()
+
+    # Determine mode: config file vs single run
+    single_mode = args.loss is not None or args.layers is not None or args.lr is not None
+    if single_mode and args.config:
+        parser.error('Cannot use --config with --loss/--layers/--lr')
+
+    # Load flight data (shared across all runs)
+    print('=' * 60)
+    print('ML Fire Detection — Hyperparameter Tuning')
+    print('=' * 60)
+    print('\n--- Loading flight data ---')
     flights = group_files_by_flight()
     flight_features = load_all_data(flights)
 
-    # Step 2: Save dataset (skip if already exists)
-    print('\n--- Step 2: Dataset ---')
-    os.makedirs('dataset', exist_ok=True)
-    dataset_path = 'dataset/fire_features.pkl.gz'
-    if os.path.exists(dataset_path):
-        print(f'  Using existing {dataset_path}')
+    if single_mode:
+        # Single run mode
+        loss = args.loss or 'bce'
+        layers = args.layers or [64, 32]
+        lr = args.lr or 1e-3
+
+        cfg = {
+            'epochs': args.epochs,
+            'batch_size': 4096,
+            'metric': 'error_rate',
+            'search_space': {
+                'loss': [loss],
+                'layers': [layers],
+                'learning_rate': [lr],
+                'importance_weights': [{'gt': 10, 'fire': 5, 'other': 1}],
+            },
+        }
+        config_path = 'single-run'
     else:
-        with gzip.open(dataset_path, 'wb') as f:
-            pickle.dump(flight_features, f, protocol=pickle.HIGHEST_PROTOCOL)
-        size_mb = os.path.getsize(dataset_path) / (1024 * 1024)
-        print(f'  Saved {dataset_path} ({size_mb:.1f} MB)')
+        config_path = args.config or 'configs/grid_search.yaml'
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f)
 
-    # Step 3: Train/test split
-    # Flight 03 (pre-burn, ground truth no fire) split 80/20 between train/test
-    # Train: 80% of 03 + flights 04, 05 (burn flights)
-    # Test: 20% of 03 + flight 06 (burn flight)
-    print('\n--- Step 3: Train/test split ---')
-    print('  Ground truth (flight 03, no fire): 80% train, 20% test')
-    train_flights = ['24-801-04', '24-801-05']  # burn flights for training
-    test_flights = ['24-801-06']  # burn flight for testing
-    X_train, y_train, w_train, X_test, y_test, w_test = extract_train_test(
-        flight_features, train_flights, test_flights,
-        ground_truth_flight='24-801-03', gt_test_ratio=0.2)
-    print(f'  Train: {len(X_train):,} locations '
-          f'({int(y_train.sum()):,} fire, '
-          f'{len(y_train) - int(y_train.sum()):,} no-fire)')
-    print(f'  Test:  {len(X_test):,} locations '
-          f'({int(y_test.sum()):,} fire, '
-          f'{len(y_test) - int(y_test.sum()):,} no-fire)')
+    combos = build_combos(cfg)
+    metric = cfg.get('metric', 'error_rate')
+    print(f'\nConfig: {config_path}')
+    print(f'Runs: {len(combos)} | Epochs: {cfg.get("epochs", 100)} | Metric: {metric}')
 
-    # Step 4: Oversample
-    print('\n--- Step 4: Oversampling fire class ---')
-    X_train_bal, y_train_bal, w_train_bal = oversample_minority(
-        X_train, y_train, w_train, ratio=1.0)
-    print(f'  Balanced: {len(X_train_bal):,} locations '
-          f'({int(y_train_bal.sum()):,} fire, '
-          f'{len(y_train_bal) - int(y_train_bal.sum()):,} no-fire)')
-    print(f'  Weight range: [{w_train_bal.min():.3f}, {w_train_bal.max():.3f}], '
-          f'mean={w_train_bal.mean():.3f}')
+    # Run grid search
+    results = run_grid_search(cfg, flight_features)
 
-    # Step 5: Normalize using sklearn StandardScaler on entire dataset
-    print('\n--- Step 5: Feature normalization (StandardScaler) ---')
-    # Fit scaler on ALL flights for consistent normalization
-    all_X = np.concatenate([ff['X'] for ff in flight_features.values()])
-    # Replace non-finite values before fitting scaler
-    all_X = np.where(np.isfinite(all_X), all_X, 0.0).astype(np.float32)
-    scaler = StandardScaler()
-    scaler.fit(all_X)
+    # Print summary table
+    print_results_table(results, metric)
 
-    # Transform train and test sets
-    X_train_bal_clean = np.where(np.isfinite(X_train_bal), X_train_bal, 0.0).astype(np.float32)
-    X_test_clean = np.where(np.isfinite(X_test), X_test, 0.0).astype(np.float32)
-    X_train_norm = scaler.transform(X_train_bal_clean).astype(np.float32)
-    X_test_norm = scaler.transform(X_test_clean).astype(np.float32)
+    # Find best run
+    best = min(results, key=lambda r: r.get(metric, float('inf')))
+    best_ckpt = best['checkpoint']
 
-    for i, name in enumerate(FEATURE_NAMES):
-        print(f'  {name:12s}: mean={scaler.mean_[i]:10.3f}, '
-              f'std={scaler.scale_[i]:10.3f}')
+    # Copy best model to fire_detector_best.pt
+    best_path = 'checkpoint/fire_detector_best.pt'
+    shutil.copy2(best_ckpt, best_path)
 
-    # Step 6: Train with weighted BCE
-    print('\n--- Step 6: Training (Weighted BCE Loss, 300 epochs) ---')
-    model, loss_history = train_model(
-        X_train_norm, y_train_bal, w_train_bal, n_epochs=300, lr=1e-3)
+    # Save results JSON
+    os.makedirs('results', exist_ok=True)
+    output = {
+        'config': config_path,
+        'timestamp': datetime.now().isoformat(),
+        'metric': metric,
+        'results': results,
+        'best_run_id': best['run_id'],
+        f'best_{metric}': best[metric],
+    }
+    results_path = 'results/grid_search_results.json'
+    with open(results_path, 'w') as f:
+        json.dump(output, f, indent=2)
 
-    # Step 7: Evaluate
-    print('\n--- Step 7: Evaluation ---')
-    X_train_clean = np.where(np.isfinite(X_train), X_train, 0.0).astype(np.float32)
-    X_train_orig_norm = scaler.transform(X_train_clean).astype(np.float32)
-
-    print('\n  Training set (flights 03+04+05):')
-    train_metrics, _ = evaluate(model, X_train_orig_norm, y_train)
-    print_metrics(train_metrics)
-
-    print(f'\n  Test set (flight 06):')
-    test_metrics, test_probs = evaluate(model, X_test_norm, y_test)
-    print_metrics(test_metrics)
-
-    # Step 8: Save model with scaler for inference
-    print('\n--- Step 8: Saving model ---')
-    os.makedirs('checkpoint', exist_ok=True)
-    model_path = 'checkpoint/fire_detector.pt'
-    torch.save({
-        'model_state': model.state_dict(),
-        'mean': scaler.mean_,
-        'std': scaler.scale_,
-        'scaler': scaler,  # Save full scaler for sklearn compatibility
-        'n_features': 8,
-        'threshold': 0.5,
-        'feature_names': FEATURE_NAMES,
-    }, model_path)
-    print(f'  Saved {model_path}')
-
-    # Step 9: Plots
-    print('\n--- Step 9: Generating plots ---')
-    os.makedirs('plots', exist_ok=True)
-    plot_training_loss(loss_history)
-
-    fire_probs = test_probs[y_test == 1]
-    nofire_probs = test_probs[y_test == 0]
-    if len(fire_probs) > 0:
-        plot_probability_hist(fire_probs, nofire_probs)
-
-    plot_prediction_map(flight_features, model, scaler, '24-801-06')
-
-    # Summary with threshold vs ML comparison
-    print('\n' + '=' * 60)
-    print('Summary:')
-    print(f'  Features:  {len(FEATURE_NAMES)} aggregate features')
-    print(f'  Model:     8 \u2192 64 \u2192 32 \u2192 1 ({sum(p.numel() for p in model.parameters()):,} params)')
-
-    # Compute ML predictions on test set
-    ml_preds = (test_probs >= 0.5).astype(bool)
-    thresh_preds = (y_test >= 0.5).astype(bool)
-
-    # Comparison metrics
-    n_thresh_fire = int(thresh_preds.sum())
-    n_ml_fire = int(ml_preds.sum())
-    both_fire = int((ml_preds & thresh_preds).sum())
-    ml_only = int((ml_preds & ~thresh_preds).sum())
-    thresh_only = int((~ml_preds & thresh_preds).sum())
-    both_nofire = int((~ml_preds & ~thresh_preds).sum())
-
-    print('\n  Threshold vs ML Comparison (Test Set):')
-    print(f'    Threshold fire detections:  {n_thresh_fire:,}')
-    print(f'    ML fire detections:         {n_ml_fire:,}')
-    print(f'    Both agree (fire):          {both_fire:,}')
-    print(f'    Both agree (no fire):       {both_nofire:,}')
-    print(f'    ML only (thresh missed):    {ml_only:,}')
-    print(f'    Threshold only (ML missed): {thresh_only:,}')
-    agreement = 100.0 * (both_fire + both_nofire) / len(y_test)
-    print(f'    Agreement rate:             {agreement:.1f}%')
-
-    print('\n  ML Model Performance (vs threshold labels):')
-    print(f'    TP: {test_metrics["TP"]:,}  (ML + threshold both say fire)')
-    print(f'    TN: {test_metrics["TN"]:,}  (ML + threshold both say no fire)')
-    print(f'    FP: {test_metrics["FP"]:,}  (ML says fire, threshold says no)')
-    print(f'    FN: {test_metrics["FN"]:,}  (ML says no fire, threshold says fire)')
-    print(f'    Precision: {test_metrics["precision"]:.4f}')
-    print(f'    Recall:    {test_metrics["recall"]:.4f}')
-
-    print(f'\n  Checkpoint: {model_path}')
-    print(f'  Dataset:    {dataset_path}')
-    print(f'\n  To use in realtime_fire.py:')
-    print(f'    Model auto-detected from {model_path}')
+    # Summary
+    wc = best['importance_weights']
+    arch = ' -> '.join(['12'] + [str(h) for h in best['layers']] + ['1'])
+    print(f'\n{"=" * 60}')
+    print(f'Best run: #{best["run_id"]}')
+    print(f'  Loss:         {best["loss"]}')
+    print(f'  Architecture: {arch}')
+    print(f'  LR:           {best["learning_rate"]}')
+    print(f'  Weights:      gt={wc["gt"]}, fire={wc["fire"]}, other={wc["other"]}')
+    print(f'  Error rate:   {best["error_rate"]:.4f}')
+    print(f'  Precision:    {best["test"]["precision"]:.4f}')
+    print(f'  Recall:       {best["test"]["recall"]:.4f}')
+    print(f'\n  Best model:  {best_path}')
+    print(f'  Results:     {results_path}')
+    print(f'\n  To compare per flight:')
+    print(f'    python compare_fire_detectors.py --model {best_path}')
+    print(f'\n  To use in realtime:')
+    print(f'    python realtime_fire.py --detector ml')
     print('Done.')
 
 

@@ -4,12 +4,35 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-    
         {
             "name": "Python Debugger: Current File",
             "type": "debugpy",
             "request": "launch",
             "program": "${file}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Grid Search",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/tune_fire_prediction.py",
+            "args": ["--config", "configs/grid_search.yaml"],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Single Train (BCE)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/tune_fire_prediction.py",
+            "args": ["--loss", "bce",
+                    "--layers", "64", "64", "64", "32"],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Compare Detectors (All Models)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/compare_fire_detectors.py",
             "console": "integratedTerminal"
         }
     ]

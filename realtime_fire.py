@@ -17,12 +17,16 @@ The operator view shows:
   - Running statistics (fire count, total area, zone breakdown)
 
 Usage:
-    python realtime_fire.py           # all flights
+    python realtime_fire.py                    # all flights, threshold detector
+    python realtime_fire.py --detector ml      # all flights, ML detector
+    python realtime_fire.py --detector simple   # all flights, threshold detector
 """
 
 from __future__ import annotations
 
+import argparse
 import os
+import sys
 from typing import Any, Dict
 
 import numpy as np
@@ -30,6 +34,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from matplotlib.patches import Rectangle
 from lib import (
     group_files_by_flight,
     compute_ndvi, init_grid_state, process_sweep, get_fire_mask,
@@ -44,7 +49,8 @@ from lib import (
 def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
                  frame_num: int, n_total: int,
                  flight_num: str, comment: str,
-                 outdir: str, cell_area_m2: float) -> str:
+                 outdir: str, cell_area_m2: float,
+                 detector_name: str = 'simple') -> str:
     """Render one frame of the real-time simulation as a PNG.
 
     Background layer is chosen by checking if the grid has accumulated
@@ -68,7 +74,7 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
                        cmap='RdYlGn', vmin=-0.2, vmax=0.8)
         cbar = plt.colorbar(bg, ax=ax, fraction=0.03, pad=0.02)
         cbar.set_label('NDVI', fontsize=18)
-        cbar.ax.tick_params(labelsize=14)
+        cbar.ax.tick_params(labelsize=18)
     else:
         valid_T4 = gs['T4'][np.isfinite(gs['T4'])]
         vmin = np.percentile(valid_T4, 2) if len(valid_T4) > 0 else 280
@@ -77,7 +83,7 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
                        cmap='inferno', vmin=vmin, vmax=vmax)
         cbar = plt.colorbar(bg, ax=ax, fraction=0.03, pad=0.02)
         cbar.set_label('T4 [K]', fontsize=18)
-        cbar.ax.tick_params(labelsize=14)
+        cbar.ax.tick_params(labelsize=18)
 
     # --- Fire overlay ---
     fire_count = int(np.sum(fire_mask))
@@ -102,17 +108,33 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
                 vf_lons = lon_axis[0] + (lon_axis[-1] - lon_axis[0]) * vf_cols / max(len(lon_axis) - 1, 1)
                 ax.scatter(vf_lons, vf_lats, s=1.5, c='orange', alpha=0.9, zorder=6)
 
-        # Label top fire zones at their centroids
+        # Label top fire zones at their centroids with bounding boxes
         for zone_id, size in zone_sizes[:10]:
             zone_mask = labels == zone_id
             zr, zc = np.where(zone_mask)
             cy = lat_axis[0] + (lat_axis[-1] - lat_axis[0]) * zr.mean() / max(len(lat_axis) - 1, 1)
             cx = lon_axis[0] + (lon_axis[-1] - lon_axis[0]) * zc.mean() / max(len(lon_axis) - 1, 1)
 
+            # Bounding box around fire zone
+            r_min, r_max = zr.min(), zr.max()
+            c_min, c_max = zc.min(), zc.max()
+            lat_top = lat_axis[0] + (lat_axis[-1] - lat_axis[0]) * r_min / max(len(lat_axis) - 1, 1)
+            lat_bot = lat_axis[0] + (lat_axis[-1] - lat_axis[0]) * r_max / max(len(lat_axis) - 1, 1)
+            lon_left = lon_axis[0] + (lon_axis[-1] - lon_axis[0]) * c_min / max(len(lon_axis) - 1, 1)
+            lon_right = lon_axis[0] + (lon_axis[-1] - lon_axis[0]) * c_max / max(len(lon_axis) - 1, 1)
+            box_x = min(lon_left, lon_right)
+            box_y = min(lat_top, lat_bot)
+            box_w = abs(lon_right - lon_left)
+            box_h = abs(lat_bot - lat_top)
+            ax.add_patch(Rectangle(
+                (box_x, box_y), box_w, box_h,
+                linewidth=1.5, edgecolor='yellow', facecolor='none',
+                linestyle='--', zorder=8))
+
             area = size * cell_area_m2
             ax.annotate(
                 f'Z{zone_id}\n{format_area(area)}',
-                (cx, cy), fontsize=12, color='yellow', fontweight='bold',
+                (cx, cy), fontsize=18, color='yellow', fontweight='bold',
                 ha='center', va='center', zorder=10,
                 bbox=dict(boxstyle='round,pad=0.3',
                           facecolor='black', alpha=0.75, edgecolor='yellow'))
@@ -142,7 +164,7 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
                 f'({size:,} px)')
 
     ax.text(0.02, 0.98, '\n'.join(stats_lines),
-            transform=ax.transAxes, fontsize=14,
+            transform=ax.transAxes, fontsize=18,
             verticalalignment='top', family='monospace',
             bbox=dict(boxstyle='round', facecolor='white',
                       alpha=0.92, edgecolor='gray'))
@@ -153,7 +175,7 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
         fontsize=18, fontweight='bold')
     ax.set_xlabel('Longitude', fontsize=18)
     ax.set_ylabel('Latitude', fontsize=18)
-    ax.tick_params(labelsize=14)
+    ax.tick_params(labelsize=18)
 
     # Legend for fire overlay colors
     legend_elements = [
@@ -162,10 +184,12 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
         Line2D([0], [0], marker='o', color='w', markerfacecolor='orange',
                markersize=8, label='Veg-confirmed fire'),
     ]
-    ax.legend(handles=legend_elements, loc='lower right', fontsize=12)
+    ax.legend(handles=legend_elements, loc='lower right', fontsize=18)
 
     plt.tight_layout()
-    outpath = os.path.join(outdir, f'frame_{frame_num:03d}.png')
+    flight_clean = flight_num.replace('-', '')
+    outpath = os.path.join(
+        outdir, f'{detector_name}-{flight_clean}-{frame_num:03d}.png')
     plt.savefig(outpath, dpi=150, bbox_inches='tight')
     plt.close()
 
@@ -177,7 +201,8 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
 
 def simulate_flight(flight_num: str, files: list[str],
                     comment: str, gs: Dict[str, Any],
-                    ml_model: Any = None) -> None:
+                    ml_model: Any = None,
+                    detector_name: str = 'simple') -> None:
     """Simulate real-time fire detection for one flight.
 
     Day/night is auto-detected per sweep from VNIR radiance.
@@ -190,6 +215,7 @@ def simulate_flight(flight_num: str, files: list[str],
         ml_model: optional MLFireDetector. When provided, overrides the
                   threshold-based fire mask with ML predictions from
                   accumulated aggregate features.
+        detector_name: 'simple' or 'ml', used in output filenames.
     """
     print('=' * 60)
     print(f'Real-Time Fire Detection Simulation')
@@ -197,11 +223,11 @@ def simulate_flight(flight_num: str, files: list[str],
     print(f'{len(files)} sweeps (day/night auto-detected per sweep)')
     print('=' * 60)
 
-    
-    outdir = f'plots/realtime_{flight_num.replace("-", "")}'
+    outdir = 'plots/realtime'
     os.makedirs(outdir, exist_ok=True)
+    flight_clean = flight_num.replace('-', '')
 
-    print(f'\nSimulating {len(files)} sweeps \u2192 {outdir}/\n')
+    print(f'\nSimulating {len(files)} sweeps \u2192 {outdir}/{detector_name}-{flight_clean}-*.png\n')
 
     pixel_rows = []
     cell_area = 0.0
@@ -229,7 +255,7 @@ def simulate_flight(flight_num: str, files: list[str],
         render_frame(
             gs, fire_mask,
             i + 1, len(files), flight_num, comment,
-            outdir, cell_area)
+            outdir, cell_area, detector_name=detector_name)
 
         dn_tag = 'day' if detected_dn == 'D' else 'night'
         print(f'  [{i+1:2d}/{len(files)}] {name} [{dn_tag}] \u2014 '
@@ -253,21 +279,38 @@ def simulate_flight(flight_num: str, files: list[str],
         for zone_id, size in zone_sizes[:5]:
             print(f'    Zone {zone_id}: {format_area(size * cell_area)} '
                   f'({size:,} px)')
-    print(f'\n  Output: {outdir}/ ({len(files)} frames)')
+    print(f'\n  Output: {outdir}/{detector_name}-{flight_clean}-*.png ({len(files)} frames)')
     print(f'\n  To create GIF:')
     print(f'    convert -delay 50 -loop 0 '
-          f'{outdir}/frame_*.png {outdir}/animation.gif')
+          f'{outdir}/{detector_name}-{flight_clean}-*.png '
+          f'{outdir}/{detector_name}-{flight_clean}.gif')
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description='Real-time fire detection simulation')
+    parser.add_argument(
+        '--detector', choices=['simple', 'ml'], default='simple',
+        help='Detection method: "simple" (threshold) or "ml" (MLP model)')
+    parser.add_argument(
+        '--model', type=str, default=None,
+        help='Path to ML checkpoint (default: auto-discover)')
+    args = parser.parse_args()
+
     flights = group_files_by_flight()
     gs = init_grid_state()  # empty, grows dynamically per sweep
 
-    # Load ML fire detector if available
-    ml_model = load_fire_model()
-    if ml_model is not None:
-        print('Using ML fire detector from checkpoint/fire_detector.pt')
+    # Load detector based on flag
+    ml_model = None
+    if args.detector == 'ml':
+        ml_model = load_fire_model(args.model)
+        if ml_model is None:
+            print('ERROR: --detector ml requires a checkpoint '
+                  '(train with: python tune_fire_prediction.py)',
+                  file=sys.stderr)
+            sys.exit(1)
+        print(f'Using ML fire detector')
     else:
-        print('Using threshold fire detector (no ML model found)')
+        print('Using threshold fire detector (simple)')
 
     print(f'\nScanned {len(flights)} flights:')
     for fnum, info in sorted(flights.items()):
@@ -275,7 +318,7 @@ def main() -> None:
     print()
     for fnum, info in sorted(flights.items()):
         simulate_flight(fnum, info['files'], info['comment'], gs,
-                        ml_model=ml_model)
+                        ml_model=ml_model, detector_name=args.detector)
 
     print('All simulations complete.')
 

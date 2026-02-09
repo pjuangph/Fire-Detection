@@ -212,3 +212,4 @@ ignite_fire_data/
 /plots
 dataset/fire_features.pkl.gz
 *.zip
+/checkpoint
