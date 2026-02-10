@@ -1,0 +1,1701 @@
+{
+  "config": "configs/grid_search.yaml",
+  "timestamp": "2026-02-10T15:53:39.285813",
+  "metric": "error_rate",
+  "results": [
+    {
+      "run_id": 1,
+      "loss": "bce",
+      "layers": [
+        64,
+        32
+      ],
+      "learning_rate": 0.01,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 131.0,
+        "FN": 0.0,
+        "TN": 971674.0,
+        "precision": 0.9882215428879698,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 7124.0,
+        "FP": 76.0,
+        "FN": 1944.0,
+        "TN": 519703.0,
+        "precision": 0.9894444444444445,
+        "recall": 0.7856197617997354
+      },
+      "error_rate": 0.2227613586237318,
+      "final_loss": 8.820793429214332e-06,
+      "checkpoint": "checkpoint/fire_detector_run_01.pt"
+    },
+    {
+      "run_id": 2,
+      "loss": "bce",
+      "layers": [
+        64,
+        32
+      ],
+      "learning_rate": 0.01,
+      "importance_weights": {
+        "gt": 15,
+        "fire": 3,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 140.0,
+        "FN": 0.0,
+        "TN": 971665.0,
+        "precision": 0.9874225137004762,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 7330.0,
+        "FP": 74.0,
+        "FN": 1738.0,
+        "TN": 519705.0,
+        "precision": 0.9900054024851431,
+        "recall": 0.8083370092633436
+      },
+      "error_rate": 0.19982355535950597,
+      "final_loss": 1.615143194600669e-05,
+      "checkpoint": "checkpoint/fire_detector_run_02.pt"
+    },
+    {
+      "run_id": 3,
+      "loss": "bce",
+      "layers": [
+        64,
+        32
+      ],
+      "learning_rate": 0.01,
+      "importance_weights": {
+        "gt": 5,
+        "fire": 10,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 184.0,
+        "FN": 0.0,
+        "TN": 971621.0,
+        "precision": 0.9835346756152126,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8234.0,
+        "FP": 140.0,
+        "FN": 834.0,
+        "TN": 519639.0,
+        "precision": 0.9832815858609983,
+        "recall": 0.908028231142479
+      },
+      "error_rate": 0.10741067490074989,
+      "final_loss": 1.0348377334296882e-05,
+      "checkpoint": "checkpoint/fire_detector_run_03.pt"
+    },
+    {
+      "run_id": 4,
+      "loss": "bce",
+      "layers": [
+        64,
+        32
+      ],
+      "learning_rate": 0.001,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 275.0,
+        "FN": 0.0,
+        "TN": 971530.0,
+        "precision": 0.9755902716137049,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8255.0,
+        "FP": 103.0,
+        "FN": 813.0,
+        "TN": 519676.0,
+        "precision": 0.9876764776262263,
+        "recall": 0.9103440670489634
+      },
+      "error_rate": 0.10101455668284076,
+      "final_loss": 3.771518622751696e-05,
+      "checkpoint": "checkpoint/fire_detector_run_04.pt"
+    },
+    {
+      "run_id": 5,
+      "loss": "bce",
+      "layers": [
+        64,
+        32
+      ],
+      "learning_rate": 0.001,
+      "importance_weights": {
+        "gt": 15,
+        "fire": 3,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 248.0,
+        "FN": 0.0,
+        "TN": 971557.0,
+        "precision": 0.9779339798914494,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 7146.0,
+        "FP": 83.0,
+        "FN": 1922.0,
+        "TN": 519696.0,
+        "precision": 0.9885184672845484,
+        "recall": 0.7880458756065285
+      },
+      "error_rate": 0.22110719011910013,
+      "final_loss": 5.730491295080386e-05,
+      "checkpoint": "checkpoint/fire_detector_run_05.pt"
+    },
+    {
+      "run_id": 6,
+      "loss": "bce",
+      "layers": [
+        64,
+        32
+      ],
+      "learning_rate": 0.001,
+      "importance_weights": {
+        "gt": 5,
+        "fire": 10,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 212.0,
+        "FN": 0.0,
+        "TN": 971593.0,
+        "precision": 0.9810764973667767,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 7902.0,
+        "FP": 128.0,
+        "FN": 1166.0,
+        "TN": 519651.0,
+        "precision": 0.9840597758405978,
+        "recall": 0.8714159682399647
+      },
+      "error_rate": 0.1426996029995589,
+      "final_loss": 1.0317906307423903e-05,
+      "checkpoint": "checkpoint/fire_detector_run_06.pt"
+    },
+    {
+      "run_id": 7,
+      "loss": "bce",
+      "layers": [
+        64,
+        32
+      ],
+      "learning_rate": 0.0001,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 1088.0,
+        "FN": 0.0,
+        "TN": 970717.0,
+        "precision": 0.9099263184038414,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 9047.0,
+        "FP": 371.0,
+        "FN": 21.0,
+        "TN": 519408.0,
+        "precision": 0.9606073476321937,
+        "recall": 0.9976841640935157
+      },
+      "error_rate": 0.043228936921041024,
+      "final_loss": 0.0002373626557750332,
+      "checkpoint": "checkpoint/fire_detector_run_07.pt"
+    },
+    {
+      "run_id": 8,
+      "loss": "bce",
+      "layers": [
+        64,
+        32
+      ],
+      "learning_rate": 0.0001,
+      "importance_weights": {
+        "gt": 15,
+        "fire": 3,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 1076.0,
+        "FN": 0.0,
+        "TN": 970729.0,
+        "precision": 0.9108311925084942,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8861.0,
+        "FP": 307.0,
+        "FN": 207.0,
+        "TN": 519472.0,
+        "precision": 0.9665139616055847,
+        "recall": 0.9771724746360829
+      },
+      "error_rate": 0.05668284075871195,
+      "final_loss": 0.0004631239784469923,
+      "checkpoint": "checkpoint/fire_detector_run_08.pt"
+    },
+    {
+      "run_id": 9,
+      "loss": "bce",
+      "layers": [
+        64,
+        32
+      ],
+      "learning_rate": 0.0001,
+      "importance_weights": {
+        "gt": 5,
+        "fire": 10,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 950.0,
+        "FN": 0.0,
+        "TN": 970855.0,
+        "precision": 0.9204421740222762,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8912.0,
+        "FP": 271.0,
+        "FN": 156.0,
+        "TN": 519508.0,
+        "precision": 0.970488946967222,
+        "recall": 0.9827966475518306
+      },
+      "error_rate": 0.047088663431848254,
+      "final_loss": 7.042996190329573e-05,
+      "checkpoint": "checkpoint/fire_detector_run_09.pt"
+    },
+    {
+      "run_id": 10,
+      "loss": "bce",
+      "layers": [
+        64,
+        64,
+        64,
+        32
+      ],
+      "learning_rate": 0.01,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 195.0,
+        "FN": 0.0,
+        "TN": 971610.0,
+        "precision": 0.9825674950831397,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 7613.0,
+        "FP": 88.0,
+        "FN": 1455.0,
+        "TN": 519691.0,
+        "precision": 0.9885729126087521,
+        "recall": 0.8395456550507279
+      },
+      "error_rate": 0.17015880017644464,
+      "final_loss": 3.2113053519648764e-05,
+      "checkpoint": "checkpoint/fire_detector_run_10.pt"
+    },
+    {
+      "run_id": 11,
+      "loss": "bce",
+      "layers": [
+        64,
+        64,
+        64,
+        32
+      ],
+      "learning_rate": 0.01,
+      "importance_weights": {
+        "gt": 15,
+        "fire": 3,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 125.0,
+        "FN": 0.0,
+        "TN": 971680.0,
+        "precision": 0.9887549478229579,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 7766.0,
+        "FP": 98.0,
+        "FN": 1302.0,
+        "TN": 519681.0,
+        "precision": 0.9875381485249237,
+        "recall": 0.8564181737979709
+      },
+      "error_rate": 0.15438906043228937,
+      "final_loss": 1.4434220744758052e-05,
+      "checkpoint": "checkpoint/fire_detector_run_11.pt"
+    },
+    {
+      "run_id": 12,
+      "loss": "bce",
+      "layers": [
+        64,
+        64,
+        64,
+        32
+      ],
+      "learning_rate": 0.01,
+      "importance_weights": {
+        "gt": 5,
+        "fire": 10,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 1529.0,
+        "FN": 0.0,
+        "TN": 970276.0,
+        "precision": 0.8778753993610223,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 9043.0,
+        "FP": 1313.0,
+        "FN": 25.0,
+        "TN": 518466.0,
+        "precision": 0.8732135959830051,
+        "recall": 0.9972430524922805
+      },
+      "error_rate": 0.1475518306131451,
+      "final_loss": 0.00014583865795004858,
+      "checkpoint": "checkpoint/fire_detector_run_12.pt"
+    },
+    {
+      "run_id": 13,
+      "loss": "bce",
+      "layers": [
+        64,
+        64,
+        64,
+        32
+      ],
+      "learning_rate": 0.001,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 163.0,
+        "FN": 0.0,
+        "TN": 971642.0,
+        "precision": 0.9853864084633316,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 7615.0,
+        "FP": 69.0,
+        "FN": 1453.0,
+        "TN": 519710.0,
+        "precision": 0.9910203019260801,
+        "recall": 0.8397662108513454
+      },
+      "error_rate": 0.1678429642699603,
+      "final_loss": 1.3205555320032278e-05,
+      "checkpoint": "checkpoint/fire_detector_run_13.pt"
+    },
+    {
+      "run_id": 14,
+      "loss": "bce",
+      "layers": [
+        64,
+        64,
+        64,
+        32
+      ],
+      "learning_rate": 0.001,
+      "importance_weights": {
+        "gt": 15,
+        "fire": 3,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 97.0,
+        "FN": 0.0,
+        "TN": 971708.0,
+        "precision": 0.9912518037518038,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 6868.0,
+        "FP": 56.0,
+        "FN": 2200.0,
+        "TN": 519723.0,
+        "precision": 0.9919121894858464,
+        "recall": 0.7573886193206881
+      },
+      "error_rate": 0.24878694309660343,
+      "final_loss": 5.1545371172504535e-06,
+      "checkpoint": "checkpoint/fire_detector_run_14.pt"
+    },
+    {
+      "run_id": 15,
+      "loss": "bce",
+      "layers": [
+        64,
+        64,
+        64,
+        32
+      ],
+      "learning_rate": 0.001,
+      "importance_weights": {
+        "gt": 5,
+        "fire": 10,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 227.0,
+        "FN": 0.0,
+        "TN": 971578.0,
+        "precision": 0.9797646639329649,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 7636.0,
+        "FP": 117.0,
+        "FN": 1432.0,
+        "TN": 519662.0,
+        "precision": 0.9849090674577583,
+        "recall": 0.8420820467578297
+      },
+      "error_rate": 0.1708204675782973,
+      "final_loss": 1.5780460282647823e-05,
+      "checkpoint": "checkpoint/fire_detector_run_15.pt"
+    },
+    {
+      "run_id": 16,
+      "loss": "bce",
+      "layers": [
+        64,
+        64,
+        64,
+        32
+      ],
+      "learning_rate": 0.0001,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 377.0,
+        "FN": 0.0,
+        "TN": 971428.0,
+        "precision": 0.9668367346938775,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8604.0,
+        "FP": 144.0,
+        "FN": 464.0,
+        "TN": 519635.0,
+        "precision": 0.9835390946502057,
+        "recall": 0.948831054256727
+      },
+      "error_rate": 0.0670489633877371,
+      "final_loss": 0.00012572114676800375,
+      "checkpoint": "checkpoint/fire_detector_run_16.pt"
+    },
+    {
+      "run_id": 17,
+      "loss": "bce",
+      "layers": [
+        64,
+        64,
+        64,
+        32
+      ],
+      "learning_rate": 0.0001,
+      "importance_weights": {
+        "gt": 15,
+        "fire": 3,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 357.0,
+        "FN": 0.0,
+        "TN": 971448.0,
+        "precision": 0.9685407120197391,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 7675.0,
+        "FP": 142.0,
+        "FN": 1393.0,
+        "TN": 519637.0,
+        "precision": 0.981834463349111,
+        "recall": 0.8463828848698721
+      },
+      "error_rate": 0.1692765769739744,
+      "final_loss": 0.00018397616829444915,
+      "checkpoint": "checkpoint/fire_detector_run_17.pt"
+    },
+    {
+      "run_id": 18,
+      "loss": "bce",
+      "layers": [
+        64,
+        64,
+        64,
+        32
+      ],
+      "learning_rate": 0.0001,
+      "importance_weights": {
+        "gt": 5,
+        "fire": 10,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 514.0,
+        "FN": 0.0,
+        "TN": 971291.0,
+        "precision": 0.9553237722729249,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8825.0,
+        "FP": 187.0,
+        "FN": 243.0,
+        "TN": 519592.0,
+        "precision": 0.9792498890368397,
+        "recall": 0.9732024702249669
+      },
+      "error_rate": 0.047419497132774595,
+      "final_loss": 6.276017403997277e-05,
+      "checkpoint": "checkpoint/fire_detector_run_18.pt"
+    },
+    {
+      "run_id": 19,
+      "loss": "bce",
+      "layers": [
+        128,
+        64,
+        32
+      ],
+      "learning_rate": 0.01,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 120.0,
+        "FN": 0.0,
+        "TN": 971685.0,
+        "precision": 0.98919989199892,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 6880.0,
+        "FP": 64.0,
+        "FN": 2188.0,
+        "TN": 519715.0,
+        "precision": 0.9907834101382489,
+        "recall": 0.7587119541243935
+      },
+      "error_rate": 0.24834583149536832,
+      "final_loss": 6.048585890521159e-06,
+      "checkpoint": "checkpoint/fire_detector_run_19.pt"
+    },
+    {
+      "run_id": 20,
+      "loss": "bce",
+      "layers": [
+        128,
+        64,
+        32
+      ],
+      "learning_rate": 0.01,
+      "importance_weights": {
+        "gt": 15,
+        "fire": 3,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 140.0,
+        "FN": 0.0,
+        "TN": 971665.0,
+        "precision": 0.9874225137004762,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 7897.0,
+        "FP": 65.0,
+        "FN": 1171.0,
+        "TN": 519714.0,
+        "precision": 0.9918362220547601,
+        "recall": 0.8708645787384208
+      },
+      "error_rate": 0.13630348478164975,
+      "final_loss": 1.416641532971125e-05,
+      "checkpoint": "checkpoint/fire_detector_run_20.pt"
+    },
+    {
+      "run_id": 21,
+      "loss": "bce",
+      "layers": [
+        128,
+        64,
+        32
+      ],
+      "learning_rate": 0.01,
+      "importance_weights": {
+        "gt": 5,
+        "fire": 10,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 152.0,
+        "FN": 0.0,
+        "TN": 971653.0,
+        "precision": 0.9863591492416763,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 7637.0,
+        "FP": 95.0,
+        "FN": 1431.0,
+        "TN": 519684.0,
+        "precision": 0.9877133988618727,
+        "recall": 0.8421923246581385
+      },
+      "error_rate": 0.1682840758711954,
+      "final_loss": 6.7956185556281404e-06,
+      "checkpoint": "checkpoint/fire_detector_run_21.pt"
+    },
+    {
+      "run_id": 22,
+      "loss": "bce",
+      "layers": [
+        128,
+        64,
+        32
+      ],
+      "learning_rate": 0.001,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 115.0,
+        "FN": 0.0,
+        "TN": 971690.0,
+        "precision": 0.9896452368089321,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 7480.0,
+        "FP": 49.0,
+        "FN": 1588.0,
+        "TN": 519730.0,
+        "precision": 0.9934918315845398,
+        "recall": 0.8248786943096603
+      },
+      "error_rate": 0.18052492280546978,
+      "final_loss": 4.73333344440721e-06,
+      "checkpoint": "checkpoint/fire_detector_run_22.pt"
+    },
+    {
+      "run_id": 23,
+      "loss": "bce",
+      "layers": [
+        128,
+        64,
+        32
+      ],
+      "learning_rate": 0.001,
+      "importance_weights": {
+        "gt": 15,
+        "fire": 3,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 108.0,
+        "FN": 0.0,
+        "TN": 971697.0,
+        "precision": 0.9902693936390666,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 7681.0,
+        "FP": 51.0,
+        "FN": 1387.0,
+        "TN": 519728.0,
+        "precision": 0.9934040351784791,
+        "recall": 0.8470445522717247
+      },
+      "error_rate": 0.15857962064402295,
+      "final_loss": 6.015381527315967e-06,
+      "checkpoint": "checkpoint/fire_detector_run_23.pt"
+    },
+    {
+      "run_id": 24,
+      "loss": "bce",
+      "layers": [
+        128,
+        64,
+        32
+      ],
+      "learning_rate": 0.001,
+      "importance_weights": {
+        "gt": 5,
+        "fire": 10,
+        "other": 1
+      },
+      "epochs_completed": 200,
+      "train": {
+        "TP": 10991.0,
+        "FP": 126.0,
+        "FN": 0.0,
+        "TN": 971679.0,
+        "precision": 0.9886660070162814,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 7934.0,
+        "FP": 66.0,
+        "FN": 1134.0,
+        "TN": 519713.0,
+        "precision": 0.99175,
+        "recall": 0.8749448610498456
+      },
+      "error_rate": 0.13233348037053375,
+      "final_loss": 3.6551106018065716e-06,
+      "checkpoint": "checkpoint/fire_detector_run_24.pt"
+    },
+    {
+      "run_id": 25,
+      "loss": "bce",
+      "layers": [
+        128,
+        64,
+        32
+      ],
+      "learning_rate": 0.0001,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 507.0,
+        "FN": 0.0,
+        "TN": 971298.0,
+        "precision": 0.9559053748477996,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8230.0,
+        "FP": 173.0,
+        "FN": 838.0,
+        "TN": 519606.0,
+        "precision": 0.979412114720933,
+        "recall": 0.9075871195412439
+      },
+      "error_rate": 0.11149095721217468,
+      "final_loss": 0.00013888860545052147,
+      "checkpoint": "checkpoint/fire_detector_run_25.pt"
+    },
+    {
+      "run_id": 26,
+      "loss": "bce",
+      "layers": [
+        128,
+        64,
+        32
+      ],
+      "learning_rate": 0.0001,
+      "importance_weights": {
+        "gt": 15,
+        "fire": 3,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 670.0,
+        "FN": 0.0,
+        "TN": 971135.0,
+        "precision": 0.9425435211388389,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8452.0,
+        "FP": 158.0,
+        "FN": 616.0,
+        "TN": 519621.0,
+        "precision": 0.9816492450638792,
+        "recall": 0.9320688134097926
+      },
+      "error_rate": 0.08535509483899427,
+      "final_loss": 0.0003412471363143241,
+      "checkpoint": "checkpoint/fire_detector_run_26.pt"
+    },
+    {
+      "run_id": 27,
+      "loss": "bce",
+      "layers": [
+        128,
+        64,
+        32
+      ],
+      "learning_rate": 0.0001,
+      "importance_weights": {
+        "gt": 5,
+        "fire": 10,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 572.0,
+        "FN": 0.0,
+        "TN": 971233.0,
+        "precision": 0.950531868892156,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8815.0,
+        "FP": 202.0,
+        "FN": 253.0,
+        "TN": 519577.0,
+        "precision": 0.9775978706886991,
+        "recall": 0.9720996912218791
+      },
+      "error_rate": 0.05017644464049405,
+      "final_loss": 5.954025550010815e-05,
+      "checkpoint": "checkpoint/fire_detector_run_27.pt"
+    },
+    {
+      "run_id": 28,
+      "loss": "bce",
+      "layers": [
+        128,
+        128,
+        128,
+        64
+      ],
+      "learning_rate": 0.01,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 358.0,
+        "FN": 0.0,
+        "TN": 971447.0,
+        "precision": 0.9684553705172262,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 7944.0,
+        "FP": 200.0,
+        "FN": 1124.0,
+        "TN": 519579.0,
+        "precision": 0.9754420432220039,
+        "recall": 0.8760476400529333
+      },
+      "error_rate": 0.14600794000882222,
+      "final_loss": 7.70764560966407e-05,
+      "checkpoint": "checkpoint/fire_detector_run_28.pt"
+    },
+    {
+      "run_id": 29,
+      "loss": "bce",
+      "layers": [
+        128,
+        128,
+        128,
+        64
+      ],
+      "learning_rate": 0.01,
+      "importance_weights": {
+        "gt": 15,
+        "fire": 3,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 215.0,
+        "FN": 0.0,
+        "TN": 971590.0,
+        "precision": 0.9808138497233625,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8347.0,
+        "FP": 123.0,
+        "FN": 721.0,
+        "TN": 519656.0,
+        "precision": 0.9854781582054309,
+        "recall": 0.9204896338773709
+      },
+      "error_rate": 0.09307454786060873,
+      "final_loss": 6.785223695062183e-05,
+      "checkpoint": "checkpoint/fire_detector_run_29.pt"
+    },
+    {
+      "run_id": 30,
+      "loss": "bce",
+      "layers": [
+        128,
+        128,
+        128,
+        64
+      ],
+      "learning_rate": 0.01,
+      "importance_weights": {
+        "gt": 5,
+        "fire": 10,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 646.0,
+        "FN": 0.0,
+        "TN": 971159.0,
+        "precision": 0.9444874108447194,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 9015.0,
+        "FP": 433.0,
+        "FN": 53.0,
+        "TN": 519346.0,
+        "precision": 0.9541701947502117,
+        "recall": 0.9941552712836348
+      },
+      "error_rate": 0.05359505955006617,
+      "final_loss": 8.862897372755358e-05,
+      "checkpoint": "checkpoint/fire_detector_run_30.pt"
+    },
+    {
+      "run_id": 31,
+      "loss": "bce",
+      "layers": [
+        128,
+        128,
+        128,
+        64
+      ],
+      "learning_rate": 0.001,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 188.0,
+        "FN": 0.0,
+        "TN": 971617.0,
+        "precision": 0.9831827533768673,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 7760.0,
+        "FP": 70.0,
+        "FN": 1308.0,
+        "TN": 519709.0,
+        "precision": 0.9910600255427842,
+        "recall": 0.8557565063961182
+      },
+      "error_rate": 0.15196294662549625,
+      "final_loss": 2.6826346253181184e-05,
+      "checkpoint": "checkpoint/fire_detector_run_31.pt"
+    },
+    {
+      "run_id": 32,
+      "loss": "bce",
+      "layers": [
+        128,
+        128,
+        128,
+        64
+      ],
+      "learning_rate": 0.001,
+      "importance_weights": {
+        "gt": 15,
+        "fire": 3,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 111.0,
+        "FN": 0.0,
+        "TN": 971694.0,
+        "precision": 0.9900018014772113,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8131.0,
+        "FP": 71.0,
+        "FN": 937.0,
+        "TN": 519708.0,
+        "precision": 0.9913435747378688,
+        "recall": 0.8966696074106749
+      },
+      "error_rate": 0.11116012351124835,
+      "final_loss": 5.741103596998377e-06,
+      "checkpoint": "checkpoint/fire_detector_run_32.pt"
+    },
+    {
+      "run_id": 33,
+      "loss": "bce",
+      "layers": [
+        128,
+        128,
+        128,
+        64
+      ],
+      "learning_rate": 0.001,
+      "importance_weights": {
+        "gt": 5,
+        "fire": 10,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 237.0,
+        "FN": 0.0,
+        "TN": 971568.0,
+        "precision": 0.9788920555753473,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 6240.0,
+        "FP": 105.0,
+        "FN": 2828.0,
+        "TN": 519674.0,
+        "precision": 0.983451536643026,
+        "recall": 0.6881340979267755
+      },
+      "error_rate": 0.3234450816056462,
+      "final_loss": 1.655989048139448e-05,
+      "checkpoint": "checkpoint/fire_detector_run_33.pt"
+    },
+    {
+      "run_id": 34,
+      "loss": "bce",
+      "layers": [
+        128,
+        128,
+        128,
+        64
+      ],
+      "learning_rate": 0.0001,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 347.0,
+        "FN": 0.0,
+        "TN": 971458.0,
+        "precision": 0.9693949550185218,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 7474.0,
+        "FP": 150.0,
+        "FN": 1594.0,
+        "TN": 519629.0,
+        "precision": 0.9803252885624344,
+        "recall": 0.8242170269078076
+      },
+      "error_rate": 0.19232465813850905,
+      "final_loss": 0.00010251285734311024,
+      "checkpoint": "checkpoint/fire_detector_run_34.pt"
+    },
+    {
+      "run_id": 35,
+      "loss": "bce",
+      "layers": [
+        128,
+        128,
+        128,
+        64
+      ],
+      "learning_rate": 0.0001,
+      "importance_weights": {
+        "gt": 15,
+        "fire": 3,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 528.0,
+        "FN": 0.0,
+        "TN": 971277.0,
+        "precision": 0.9541626877333101,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8504.0,
+        "FP": 159.0,
+        "FN": 564.0,
+        "TN": 519620.0,
+        "precision": 0.9816460810342837,
+        "recall": 0.9378032642258491
+      },
+      "error_rate": 0.07973092192324659,
+      "final_loss": 0.0002925402252996409,
+      "checkpoint": "checkpoint/fire_detector_run_35.pt"
+    },
+    {
+      "run_id": 36,
+      "loss": "bce",
+      "layers": [
+        128,
+        128,
+        128,
+        64
+      ],
+      "learning_rate": 0.0001,
+      "importance_weights": {
+        "gt": 5,
+        "fire": 10,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 547.0,
+        "FN": 0.0,
+        "TN": 971258.0,
+        "precision": 0.952591436990813,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8810.0,
+        "FP": 191.0,
+        "FN": 258.0,
+        "TN": 519588.0,
+        "precision": 0.9787801355404955,
+        "recall": 0.9715483017203352
+      },
+      "error_rate": 0.04951477723864137,
+      "final_loss": 5.832342634936555e-05,
+      "checkpoint": "checkpoint/fire_detector_run_36.pt"
+    },
+    {
+      "run_id": 37,
+      "loss": "error-rate",
+      "layers": [
+        64,
+        32
+      ],
+      "learning_rate": 0.01,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 539.0,
+        "FN": 0.0,
+        "TN": 971266.0,
+        "precision": 0.9532523850823937,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8991.0,
+        "FP": 226.0,
+        "FN": 77.0,
+        "TN": 519553.0,
+        "precision": 0.9754800911359445,
+        "recall": 0.9915086016762241
+      },
+      "error_rate": 0.03341420379355977,
+      "final_loss": 0.00010335018303056319,
+      "checkpoint": "checkpoint/fire_detector_run_37.pt"
+    },
+    {
+      "run_id": 38,
+      "loss": "error-rate",
+      "layers": [
+        64,
+        32
+      ],
+      "learning_rate": 0.001,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 526.0,
+        "FN": 0.0,
+        "TN": 971279.0,
+        "precision": 0.9543283841278111,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 9011.0,
+        "FP": 232.0,
+        "FN": 57.0,
+        "TN": 519547.0,
+        "precision": 0.9748999242670129,
+        "recall": 0.9937141596823996
+      },
+      "error_rate": 0.031870313189236874,
+      "final_loss": 0.00010121111686863837,
+      "checkpoint": "checkpoint/fire_detector_run_38.pt"
+    },
+    {
+      "run_id": 39,
+      "loss": "error-rate",
+      "layers": [
+        64,
+        32
+      ],
+      "learning_rate": 0.0001,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 660.0,
+        "FN": 0.0,
+        "TN": 971145.0,
+        "precision": 0.9433525019311647,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 9056.0,
+        "FP": 275.0,
+        "FN": 12.0,
+        "TN": 519504.0,
+        "precision": 0.9705283463723073,
+        "recall": 0.9986766651962946
+      },
+      "error_rate": 0.03164975738861932,
+      "final_loss": 0.00014746703574485212,
+      "checkpoint": "checkpoint/fire_detector_run_39.pt"
+    },
+    {
+      "run_id": 40,
+      "loss": "error-rate",
+      "layers": [
+        64,
+        64,
+        64,
+        32
+      ],
+      "learning_rate": 0.01,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10640.0,
+        "FP": 1218.0,
+        "FN": 351.0,
+        "TN": 970587.0,
+        "precision": 0.89728453364817,
+        "recall": 0.9680647802747703
+      },
+      "test": {
+        "TP": 8740.0,
+        "FP": 715.0,
+        "FN": 328.0,
+        "TN": 519064.0,
+        "precision": 0.9243786356425172,
+        "recall": 0.9638288486987208
+      },
+      "error_rate": 0.11501985002205559,
+      "final_loss": 0.0062321317485348835,
+      "checkpoint": "checkpoint/fire_detector_run_40.pt"
+    },
+    {
+      "run_id": 41,
+      "loss": "error-rate",
+      "layers": [
+        64,
+        64,
+        64,
+        32
+      ],
+      "learning_rate": 0.001,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 517.0,
+        "FN": 0.0,
+        "TN": 971288.0,
+        "precision": 0.9550747306221758,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8912.0,
+        "FP": 205.0,
+        "FN": 156.0,
+        "TN": 519574.0,
+        "precision": 0.9775145332894593,
+        "recall": 0.9827966475518306
+      },
+      "error_rate": 0.039810322011468904,
+      "final_loss": 9.910018815488742e-05,
+      "checkpoint": "checkpoint/fire_detector_run_41.pt"
+    },
+    {
+      "run_id": 42,
+      "loss": "error-rate",
+      "layers": [
+        64,
+        64,
+        64,
+        32
+      ],
+      "learning_rate": 0.0001,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 525.0,
+        "FN": 0.0,
+        "TN": 971280.0,
+        "precision": 0.9544112539076068,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8924.0,
+        "FP": 219.0,
+        "FN": 144.0,
+        "TN": 519560.0,
+        "precision": 0.9760472492617303,
+        "recall": 0.984119982355536
+      },
+      "error_rate": 0.04003087781208646,
+      "final_loss": 0.0001015664668279911,
+      "checkpoint": "checkpoint/fire_detector_run_42.pt"
+    },
+    {
+      "run_id": 43,
+      "loss": "error-rate",
+      "layers": [
+        128,
+        64,
+        32
+      ],
+      "learning_rate": 0.01,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10718.0,
+        "FP": 760.0,
+        "FN": 273.0,
+        "TN": 971045.0,
+        "precision": 0.9337863739327409,
+        "recall": 0.9751614957692658
+      },
+      "test": {
+        "TP": 8936.0,
+        "FP": 663.0,
+        "FN": 132.0,
+        "TN": 519116.0,
+        "precision": 0.9309303052401292,
+        "recall": 0.9854433171592413
+      },
+      "error_rate": 0.0876709307454786,
+      "final_loss": 0.004830969813509432,
+      "checkpoint": "checkpoint/fire_detector_run_43.pt"
+    },
+    {
+      "run_id": 44,
+      "loss": "error-rate",
+      "layers": [
+        128,
+        64,
+        32
+      ],
+      "learning_rate": 0.001,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 499.0,
+        "FN": 0.0,
+        "TN": 971306.0,
+        "precision": 0.9565709312445605,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8925.0,
+        "FP": 198.0,
+        "FN": 143.0,
+        "TN": 519581.0,
+        "precision": 0.9782966129562644,
+        "recall": 0.9842302602558447
+      },
+      "error_rate": 0.03760476400529334,
+      "final_loss": 9.609718470063221e-05,
+      "checkpoint": "checkpoint/fire_detector_run_44.pt"
+    },
+    {
+      "run_id": 45,
+      "loss": "error-rate",
+      "layers": [
+        128,
+        64,
+        32
+      ],
+      "learning_rate": 0.0001,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 531.0,
+        "FN": 0.0,
+        "TN": 971274.0,
+        "precision": 0.9539142509980906,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 9004.0,
+        "FP": 220.0,
+        "FN": 64.0,
+        "TN": 519559.0,
+        "precision": 0.9761491760624458,
+        "recall": 0.9929422143802382
+      },
+      "error_rate": 0.031318923687692984,
+      "final_loss": 0.00010417274353267769,
+      "checkpoint": "checkpoint/fire_detector_run_45.pt"
+    },
+    {
+      "run_id": 46,
+      "loss": "error-rate",
+      "layers": [
+        128,
+        128,
+        128,
+        64
+      ],
+      "learning_rate": 0.01,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 0.0,
+        "FP": 0.0,
+        "FN": 10991.0,
+        "TN": 971805.0,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "test": {
+        "TP": 0.0,
+        "FP": 0.0,
+        "FN": 9068.0,
+        "TN": 519779.0,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "error_rate": 1.0,
+      "final_loss": 0.18623878937386443,
+      "checkpoint": "checkpoint/fire_detector_run_46.pt"
+    },
+    {
+      "run_id": 47,
+      "loss": "error-rate",
+      "layers": [
+        128,
+        128,
+        128,
+        64
+      ],
+      "learning_rate": 0.001,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 515.0,
+        "FN": 0.0,
+        "TN": 971290.0,
+        "precision": 0.9552407439596732,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8974.0,
+        "FP": 210.0,
+        "FN": 94.0,
+        "TN": 519569.0,
+        "precision": 0.9771341463414634,
+        "recall": 0.9896338773709749
+      },
+      "error_rate": 0.03352448169386855,
+      "final_loss": 9.874662714428258e-05,
+      "checkpoint": "checkpoint/fire_detector_run_47.pt"
+    },
+    {
+      "run_id": 48,
+      "loss": "error-rate",
+      "layers": [
+        128,
+        128,
+        128,
+        64
+      ],
+      "learning_rate": 0.0001,
+      "importance_weights": {
+        "gt": 10,
+        "fire": 5,
+        "other": 1
+      },
+      "epochs_completed": 100,
+      "train": {
+        "TP": 10991.0,
+        "FP": 506.0,
+        "FN": 0.0,
+        "TN": 971299.0,
+        "precision": 0.9559885187440201,
+        "recall": 1.0
+      },
+      "test": {
+        "TP": 8927.0,
+        "FP": 202.0,
+        "FN": 141.0,
+        "TN": 519577.0,
+        "precision": 0.9778727133311426,
+        "recall": 0.9844508160564622
+      },
+      "error_rate": 0.0378253198059109,
+      "final_loss": 9.717629452111243e-05,
+      "checkpoint": "checkpoint/fire_detector_run_48.pt"
+    }
+  ],
+  "best_run_id": 45,
+  "best_error_rate": 0.031318923687692984
+}

@@ -156,12 +156,18 @@ def _find_checkpoint(model_path: str | None = None) -> str | None:
 
 def load_fire_model(
     model_path: str | None = None,
+    threshold: float | None = None,
 ) -> _MLFireDetector | None:
-    """Load trained ML fire detector for realtime use. Returns None if not found."""
+    """Load trained ML fire detector for realtime use. Returns None if not found.
+
+    Args:
+        model_path: Explicit checkpoint path, or None for auto-discovery.
+        threshold: Override classification threshold (default: use checkpoint value).
+    """
     path = _find_checkpoint(model_path)
     if path is None:
         return None
-    return _MLFireDetector(path)
+    return _MLFireDetector(path, threshold=threshold)
 
 
 class _MLFireDetector:
@@ -171,7 +177,7 @@ class _MLFireDetector:
     stored in grid state (gs). Used by realtime_fire.py.
     """
 
-    def __init__(self, model_path: str) -> None:
+    def __init__(self, model_path: str, threshold: float | None = None) -> None:
         from lib.fire import compute_aggregate_features
         self._compute_features = compute_aggregate_features
 
@@ -184,7 +190,7 @@ class _MLFireDetector:
         self.model.eval()
         self.mean = ckpt['mean']
         self.std = ckpt['std']
-        self.threshold = ckpt.get('threshold', 0.5)
+        self.threshold = threshold if threshold is not None else ckpt.get('threshold', 0.5)
 
     def predict_from_gs(self, gs: dict[str, Any]) -> np.ndarray:
         """Compute aggregate features from gs accumulators, run MLP.

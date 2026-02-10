@@ -112,6 +112,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
     combos = build_combos(cfg)
     epochs = cfg.get('epochs', 100)
     batch_size = cfg.get('batch_size', 4096)
+    save_every = cfg.get('save_every', 25)
 
     # Load previously completed results (restart support)
     existing_results = _load_existing_results(results_path)
@@ -157,24 +158,42 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         use_error_rate = loss == 'error-rate'
         key = _combo_key(combo)
 
-        # Skip fully-trained runs
+        # Skip fully-trained runs (check JSON results first)
         existing = existing_by_key.get(key)
+        ckpt_path = f'checkpoint/fire_detector_run_{run_id:02d}.pt'
         if existing and existing.get('epochs_completed', 0) >= epochs:
             print(f'\n  Run {run_id}/{n_combos}: SKIPPED (already completed)')
             continue
+
+        # Check for resume checkpoint on disk (handles crash recovery)
+        resume_ckpt = None
+        resume_epochs = 0
+        if os.path.isfile(ckpt_path):
+            try:
+                ckpt_info = torch.load(ckpt_path, weights_only=False,
+                                       map_location='cpu')
+                resume_epochs = ckpt_info.get('epochs_completed', 0)
+            except Exception:
+                resume_epochs = 0
+            if resume_epochs >= epochs:
+                # Fully trained checkpoint without JSON entry — re-evaluate
+                pass  # fall through to train_model (returns immediately)
+            if resume_epochs > 0:
+                resume_ckpt = ckpt_path
+        elif existing and existing.get('checkpoint'):
+            # Fallback: checkpoint path from JSON results
+            ckpt_file = existing['checkpoint']
+            if os.path.isfile(ckpt_file):
+                resume_ckpt = ckpt_file
+                resume_epochs = existing.get('epochs_completed', 0)
 
         arch_str = ' -> '.join(['12'] + [str(h) for h in layers] + ['1'])
         wt_str = f"gt={wc['gt']}, fire={wc['fire']}, other={wc['other']}"
         print(f'\n{"=" * 60}')
         print(f'Run {run_id}/{n_combos}: {loss}, {arch_str}, lr={lr}, weights=[{wt_str}]')
         print('=' * 60)
-
-        # Resume from under-trained checkpoint if available
-        resume_ckpt = None
-        if existing and existing.get('epochs_completed', 0) < epochs:
-            resume_ckpt = existing.get('checkpoint')
-            print(f'  Resuming under-trained run '
-                  f'({existing["epochs_completed"]}/{epochs} epochs)')
+        if resume_ckpt:
+            print(f'  Resuming from checkpoint ({resume_epochs}/{epochs} epochs)')
 
         # Build train/test with this combo's importance weights
         X_train, y_train, w_train, X_test, y_test, w_test = extract_train_test(
@@ -210,7 +229,8 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             X_norm, y_ready, w_ready,
             n_epochs=epochs, lr=lr, batch_size=batch_size,
             loss_fn=loss, hidden_layers=layers, P_total=P_original,
-            quiet=False, resume_from=resume_ckpt)
+            quiet=False, resume_from=resume_ckpt,
+            save_path=ckpt_path, save_every=save_every)
 
         model = train_result['model']
         loss_history = train_result['loss_history']
@@ -305,6 +325,43 @@ def print_results_table(results: list[dict[str, Any]], metric: str) -> None:
               f'{r["error_rate"]:>7.4f}')
 
 
+def write_best_model_config(best: dict[str, Any], checkpoint_path: str,
+                            config_path: str = 'configs/best_model.yaml',
+                            ) -> str:
+    """Write YAML config for the best model (consumed by realtime_fire.py)."""
+    wc = best['importance_weights']
+    t = best['test']
+    config = {
+        'detector': 'ml',
+        'checkpoint': checkpoint_path,
+        'threshold': 0.5,
+        'training': {
+            'loss': best['loss'],
+            'layers': best['layers'],
+            'learning_rate': best['learning_rate'],
+            'epochs': best['epochs_completed'],
+            'importance_weights': {
+                'gt': wc['gt'],
+                'fire': wc['fire'],
+                'other': wc['other'],
+            },
+        },
+        'metrics': {
+            'error_rate': float(best['error_rate']),
+            'precision': float(t['precision']),
+            'recall': float(t['recall']),
+            'TP': int(t['TP']),
+            'FP': int(t['FP']),
+            'FN': int(t['FN']),
+            'TN': int(t['TN']),
+        },
+    }
+    os.makedirs(os.path.dirname(config_path) or '.', exist_ok=True)
+    with open(config_path, 'w') as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+    return config_path
+
+
 # ── Main ──────────────────────────────────────────────────────
 
 
@@ -378,6 +435,10 @@ def main() -> None:
     best_path = 'checkpoint/fire_detector_best.pt'
     shutil.copy2(best_ckpt, best_path)
 
+    # Write best model config YAML for realtime_fire.py
+    model_config_path = 'configs/best_model.yaml'
+    write_best_model_config(best, best_path, model_config_path)
+
     # Summary
     wc = best['importance_weights']
     arch = ' -> '.join(['12'] + [str(h) for h in best['layers']] + ['1'])
@@ -391,11 +452,12 @@ def main() -> None:
     print(f'  Precision:    {best["test"]["precision"]:.4f}')
     print(f'  Recall:       {best["test"]["recall"]:.4f}')
     print(f'\n  Best model:  {best_path}')
+    print(f'  Config:      {model_config_path}')
     print(f'  Results:     {results_path}')
     print(f'\n  To compare per flight:')
     print(f'    python compare_fire_detectors.py --model {best_path}')
     print(f'\n  To use in realtime:')
-    print(f'    python realtime_fire.py --detector ml')
+    print(f'    python realtime_fire.py --config {model_config_path}')
     print('Done.')
 
 

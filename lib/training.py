@@ -170,12 +170,16 @@ def train_model(
     P_total: float | None = None,
     quiet: bool = False,
     resume_from: str | None = None,
+    save_path: str | None = None,
+    save_every: int = 25,
 ) -> TrainResult:
     """Train FireMLP with the selected loss function.
 
     Args:
         quiet: If True, suppress per-epoch progress bar.
         resume_from: Checkpoint path to resume training from.
+        save_path: If set, save checkpoint to this path periodically.
+        save_every: Save checkpoint every N epochs (default 25).
 
     Returns:
         Dict with keys: model, loss_history, epochs_completed,
@@ -258,6 +262,17 @@ def train_model(
         if not quiet:
             pbar.set_postfix({'loss': f'{avg_loss:.4e}', 'lr': f'{cur_lr:.1e}',
                               'ep': f'{epoch + 1}/{n_epochs}'})
+
+        # Periodic checkpoint save for crash recovery
+        epochs_done = start_epoch + i + 1
+        if save_path and save_every > 0 and epochs_done % save_every == 0:
+            torch.save({
+                'model_state': model.state_dict(),
+                'optimizer_state': optimizer.state_dict(),
+                'scheduler_state': scheduler.state_dict(),
+                'epochs_completed': epochs_done,
+                'hidden_layers': hidden_layers or [64, 32],
+            }, save_path)
 
     model = model.cpu()
     return {

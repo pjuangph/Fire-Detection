@@ -17,9 +17,8 @@ The operator view shows:
   - Running statistics (fire count, total area, zone breakdown)
 
 Usage:
-    python realtime_fire.py                    # all flights, threshold detector
-    python realtime_fire.py --detector ml      # all flights, ML detector
-    python realtime_fire.py --detector simple   # all flights, threshold detector
+    python realtime_fire.py                                   # threshold detector
+    python realtime_fire.py --config configs/best_model.yaml  # ML from config
 """
 
 from __future__ import annotations
@@ -28,6 +27,8 @@ import argparse
 import os
 import sys
 from typing import Any, Dict
+
+import yaml
 
 import numpy as np
 import matplotlib
@@ -289,28 +290,30 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description='Real-time fire detection simulation')
     parser.add_argument(
-        '--detector', choices=['simple', 'ml'], default='simple',
-        help='Detection method: "simple" (threshold) or "ml" (MLP model)')
-    parser.add_argument(
-        '--model', type=str, default=None,
-        help='Path to ML checkpoint (default: auto-discover)')
+        '--config', type=str, default=None,
+        help='Path to model config YAML (e.g. configs/best_model.yaml)')
     args = parser.parse_args()
+
+    # Load ML config from YAML, or fall back to simple threshold detector
+    ml_model = None
+    detector = 'simple'
+    if args.config:
+        with open(args.config) as f:
+            model_cfg = yaml.safe_load(f)
+        detector = model_cfg.get('detector', 'ml')
+        model_path = model_cfg['checkpoint']
+        threshold = model_cfg.get('threshold')
+        ml_model = load_fire_model(model_path, threshold=threshold)
+        if ml_model is None:
+            print(f'ERROR: checkpoint not found: {model_path}',
+                  file=sys.stderr)
+            sys.exit(1)
+        print(f'Using ML fire detector ({args.config})')
+    else:
+        print('Using threshold fire detector (simple)')
 
     flights = group_files_by_flight()
     gs = init_grid_state()  # empty, grows dynamically per sweep
-
-    # Load detector based on flag
-    ml_model = None
-    if args.detector == 'ml':
-        ml_model = load_fire_model(args.model)
-        if ml_model is None:
-            print('ERROR: --detector ml requires a checkpoint '
-                  '(train with: python tune_fire_prediction.py)',
-                  file=sys.stderr)
-            sys.exit(1)
-        print(f'Using ML fire detector')
-    else:
-        print('Using threshold fire detector (simple)')
 
     print(f'\nScanned {len(flights)} flights:')
     for fnum, info in sorted(flights.items()):
@@ -318,7 +321,7 @@ def main() -> None:
     print()
     for fnum, info in sorted(flights.items()):
         simulate_flight(fnum, info['files'], info['comment'], gs,
-                        ml_model=ml_model, detector_name=args.detector)
+                        ml_model=ml_model, detector_name=detector)
 
     print('All simulations complete.')
 
