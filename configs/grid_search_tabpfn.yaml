@@ -15,7 +15,7 @@ save_every: 5               # save checkpoint every N epochs for crash recovery
 
 search_space:
   learning_rate: [3.0e-4, 1.0e-4]
-  batch_size: [128, 256, 512]
+  batch_size: [4096]
   n_estimators: [1, 2]
   weight_decay: [0.01, 0.001]
   grad_clip_norm: [0.5, 1.0]

@@ -197,7 +197,15 @@ def train_tabpfn_model(
         return early_result
 
     rng = np.random.default_rng(seed)
-    splitter = partial(train_test_split, test_size=0.2, random_state=seed)
+
+    def _safe_split(*args, stratify=None, **kwargs):
+        """Split that falls back to non-stratified when a class has < 2 members."""
+        try:
+            return train_test_split(*args, stratify=stratify, **kwargs)
+        except ValueError:
+            return train_test_split(*args, stratify=None, **kwargs)
+
+    splitter = partial(_safe_split, test_size=0.2, random_state=seed)
 
     remaining = n_epochs - start_epoch
     loss_history = np.zeros((remaining, 1))
