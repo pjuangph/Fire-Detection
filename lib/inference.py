@@ -1,4 +1,4 @@
-"""ML fire detection inference: model definition, loading, and prediction."""
+"""ML fire detection inference: loading, and prediction."""
 
 from __future__ import annotations
 
@@ -8,8 +8,9 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 import torch
-import torch.nn as nn
 from sklearn.preprocessing import StandardScaler
+
+from models.firemlp import FireMLP
 
 # Type aliases
 NDArrayFloat = npt.NDArray[np.floating[Any]]
@@ -20,55 +21,6 @@ FEATURE_NAMES = [
     'Red_mean', 'NIR_mean',
     'NDVI_min', 'NDVI_mean', 'NDVI_drop', 'obs_count',
 ]
-
-
-class FireMLP(nn.Module):
-    """MLP fire detector from aggregate features.
-
-    Variable-depth architecture: n_features -> [hidden layers] -> 1.
-    Output is raw logits; use BCEWithLogitsLoss or sigmoid for probabilities.
-
-    Attributes:
-        hidden_layers (list[int]): Hidden layer sizes used to build the network.
-        net (nn.Sequential): The neural network layers.
-    """
-
-    def __init__(
-        self,
-        n_features: int = 12,
-        hidden_layers: list[int] | None = None,
-    ) -> None:
-        """Initialize FireMLP.
-
-        Args:
-            n_features: Number of input features. Default 12.
-            hidden_layers: List of hidden layer sizes, e.g. [64, 32, 16, 8].
-                Default [64, 32] for backward compatibility.
-        """
-        super().__init__()
-        if hidden_layers is None:
-            hidden_layers = [64, 32]
-        self.hidden_layers = list(hidden_layers)
-
-        layers: list[nn.Module] = []
-        in_dim = n_features
-        for h in hidden_layers:
-            layers.append(nn.Linear(in_dim, h))
-            layers.append(nn.ReLU())
-            in_dim = h
-        layers.append(nn.Linear(in_dim, 1))
-        self.net = nn.Sequential(*layers)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass.
-
-        Args:
-            x (torch.Tensor): Input tensor of shape (batch, n_features).
-
-        Returns:
-            torch.Tensor: Raw logits of shape (batch,).
-        """
-        return self.net(x).squeeze(-1)
 
 
 def load_model(
@@ -135,20 +87,32 @@ def predict(
     return preds, probs
 
 
-def _find_checkpoint(model_path: str | None = None) -> str | None:
+def _find_checkpoint(
+    model_path: str | None = None,
+    model_type: str = 'firemlp',
+) -> str | None:
     """Find a checkpoint file, checking explicit path then auto-discovery.
 
-    Search order: explicit path > fire_detector_bce.pt > fire_detector_error-rate.pt
-    > legacy fire_detector.pt.
+    Args:
+        model_path: Explicit path. If valid file, returned immediately.
+        model_type: 'firemlp' or 'tabpfn' — controls auto-discovery candidates.
     """
     if model_path and os.path.isfile(model_path):
         return model_path
-    for candidate in [
-        'checkpoint/fire_detector_best.pt',
-        'checkpoint/fire_detector_bce.pt',
-        'checkpoint/fire_detector_error-rate.pt',
-        'checkpoint/fire_detector.pt',
-    ]:
+
+    if model_type == 'tabpfn':
+        candidates = [
+            'checkpoint/fire_detector_tabpfn_best.pt',
+        ]
+    else:
+        candidates = [
+            'checkpoint/fire_detector_best.pt',
+            'checkpoint/fire_detector_bce.pt',
+            'checkpoint/fire_detector_error-rate.pt',
+            'checkpoint/fire_detector.pt',
+        ]
+
+    for candidate in candidates:
         if os.path.isfile(candidate):
             return candidate
     return None
@@ -157,24 +121,28 @@ def _find_checkpoint(model_path: str | None = None) -> str | None:
 def load_fire_model(
     model_path: str | None = None,
     threshold: float | None = None,
-) -> _MLFireDetector | None:
+    model_type: str = 'firemlp',
+) -> '_MLFireDetector | _TabPFNFireDetector | None':
     """Load trained ML fire detector for realtime use. Returns None if not found.
 
     Args:
         model_path: Explicit checkpoint path, or None for auto-discovery.
         threshold: Override classification threshold (default: use checkpoint value).
+        model_type: 'firemlp' or 'tabpfn'.
     """
-    path = _find_checkpoint(model_path)
+    path = _find_checkpoint(model_path, model_type=model_type)
     if path is None:
         return None
+    if model_type == 'tabpfn':
+        return _TabPFNFireDetector(path, threshold=threshold)
     return _MLFireDetector(path, threshold=threshold)
 
 
 class _MLFireDetector:
-    """Wrapper for grid-state-based inference in realtime_fire.py.
+    """Wrapper for grid-state-based inference in realtime scripts.
 
     Loads a trained model and predicts fire from running accumulators
-    stored in grid state (gs). Used by realtime_fire.py.
+    stored in grid state (gs).
     """
 
     def __init__(self, model_path: str, threshold: float | None = None) -> None:
@@ -228,6 +196,99 @@ class _MLFireDetector:
         with torch.no_grad():
             logits = self.model(torch.tensor(x))
             probs = torch.sigmoid(logits).squeeze(-1).numpy()
+
+        prob_grid[valid_mask] = probs
+        return prob_grid
+
+
+class _TabPFNFireDetector:
+    """Wrapper for grid-state-based TabPFN inference in realtime scripts.
+
+    Supports two checkpoint formats:
+      - `.pt` (from-scratch): reconstructs TabPFNClassifier from random init,
+        loads trained weights, fits on saved representative context.
+      - `.pkl` (legacy joblib): loads pre-fitted TabPFNClassifier directly.
+    """
+
+    def __init__(self, model_path: str, threshold: float | None = None) -> None:
+        from lib.fire import compute_aggregate_features
+        self._compute_features = compute_aggregate_features
+
+        if model_path.endswith('.pkl'):
+            self._load_legacy(model_path, threshold)
+        else:
+            self._load_from_scratch(model_path, threshold)
+
+    def _load_legacy(self, model_path: str, threshold: float | None) -> None:
+        """Load pre-fitted TabPFNClassifier from joblib checkpoint."""
+        import joblib
+        ckpt = joblib.load(model_path)
+        self.model = ckpt['model']
+        self.scaler = ckpt['scaler']
+        self.threshold = threshold if threshold is not None else ckpt.get('threshold', 0.5)
+
+    def _load_from_scratch(self, model_path: str, threshold: float | None) -> None:
+        """Load from-scratch trained TabPFN from torch checkpoint.
+
+        Reconstructs the classifier with random weights, loads the trained
+        state dict, clones for evaluation, and fits on the saved context.
+        """
+        from tabpfn import TabPFNClassifier
+        from tabpfn.finetuning.train_util import clone_model_for_evaluation
+
+        ckpt = torch.load(model_path, weights_only=False, map_location='cpu')
+
+        self.scaler = ckpt['scaler']
+        self.threshold = threshold if threshold is not None else ckpt.get('threshold', 0.5)
+
+        # Reconstruct classifier with random weights, then load trained weights
+        init_args = ckpt['classifier_init']
+        classifier = TabPFNClassifier(
+            **init_args,
+            fit_mode="batched",
+            differentiable_input=False,
+        )
+        classifier._initialize_model_variables()
+        classifier.models_[0].load_state_dict(ckpt['model_state_dict'])
+
+        # Clone for clean evaluation and fit on saved context
+        eval_init = {k: v for k, v in init_args.items() if k != 'model_path'}
+        eval_clf = clone_model_for_evaluation(
+            classifier, eval_init, TabPFNClassifier)
+        eval_clf.fit(ckpt['context_X'], ckpt['context_y'])
+
+        self.model = eval_clf  # has predict_proba()
+
+    def predict_from_gs(self, gs: dict[str, Any]) -> np.ndarray:
+        """Compute aggregate features from gs accumulators, run TabPFN.
+
+        Returns:
+            bool fire mask (nrows x ncols).
+        """
+        features, valid_mask = self._compute_features(gs)
+        fire_mask = np.zeros((gs['nrows'], gs['ncols']), dtype=bool)
+
+        if features.shape[0] == 0:
+            return fire_mask
+
+        X = np.where(np.isfinite(features), features, 0.0).astype(np.float32)
+        X = self.scaler.transform(X)
+        probs = self.model.predict_proba(X)[:, 1]
+
+        fire_mask[valid_mask] = probs >= self.threshold
+        return fire_mask
+
+    def predict_proba_from_gs(self, gs: dict[str, Any]) -> np.ndarray:
+        """Return P(fire) grid (nrows x ncols), NaN where no data."""
+        features, valid_mask = self._compute_features(gs)
+        prob_grid = np.full((gs['nrows'], gs['ncols']), np.nan, dtype=np.float32)
+
+        if features.shape[0] == 0:
+            return prob_grid
+
+        X = np.where(np.isfinite(features), features, 0.0).astype(np.float32)
+        X = self.scaler.transform(X)
+        probs = self.model.predict_proba(X)[:, 1]
 
         prob_grid[valid_mask] = probs
         return prob_grid

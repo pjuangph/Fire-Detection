@@ -1,0 +1,32 @@
+# Grid search configuration for fire detection MLP tuning.
+#
+# Usage:
+#   python train_mlp.py --config configs/grid_search_mlp.yaml
+#
+# The search iterates over all combinations of the parameters below.
+# For error-rate loss, importance_weights are ignored (uniform weights used).
+#
+# Grid size: BCE 4x3x3=36 + Error-rate 4x3=12 = 48 total runs.
+
+epochs: 100
+batch_size: 4096
+save_every: 25              # save checkpoint every N epochs for crash recovery
+metric: error_rate          # minimize (FN+FP)/P on test set
+
+search_space:
+  loss: [bce, error-rate]
+
+  layers:
+    - [64, 32]
+    - [64, 64, 64, 32]
+    - [128, 64, 32]
+    - [128, 128, 128, 64]
+
+  learning_rate: [0.01, 0.001, 0.0001]
+
+  # Importance weights for compute_pixel_weights (BCE only).
+  # Error-rate loss uses uniform weights regardless of this setting.
+  importance_weights:
+    - {gt: 10, fire: 5, other: 1}    # current default
+    - {gt: 15, fire: 3, other: 1}    # heavier FP penalty
+    - {gt: 5, fire: 10, other: 1}    # heavier FN penalty

@@ -13,7 +13,7 @@ from lib.fire import (
     compute_aggregate_features,
 )
 from lib.inference import (
-    FireMLP, FEATURE_NAMES, load_model, predict, load_fire_model,
+    FEATURE_NAMES, load_model, predict, load_fire_model,
 )
 from lib.vegetation import compute_ndvi, has_sunlight, detect_vegetation_loss
 from lib.mosaic import (
@@ -30,5 +30,5 @@ from lib.plotting import (
     plot_training_loss, plot_probability_hist, plot_prediction_map,
 )
 from lib.training import (
-    load_all_data, extract_train_test, oversample_minority, train_model,
+    load_all_data, extract_train_test, oversample_minority,
 )

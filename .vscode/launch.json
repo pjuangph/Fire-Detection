@@ -12,20 +12,28 @@
             "console": "integratedTerminal"
         },
         {
-            "name": "Grid Search",
+            "name": "MLP Grid Search",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/tune_fire_prediction.py",
-            "args": ["--config", "configs/grid_search.yaml"],
+            "program": "${workspaceFolder}/train_mlp.py",
+            "args": ["--config", "configs/grid_search_mlp.yaml"],
             "console": "integratedTerminal"
         },
         {
-            "name": "Single Train (BCE)",
+            "name": "MLP Single Train (BCE)",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/tune_fire_prediction.py",
+            "program": "${workspaceFolder}/train_mlp.py",
             "args": ["--loss", "bce",
                     "--layers", "64", "64", "64", "32"],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "TabPFN Grid Search",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/train_tabpfn.py",
+            "args": ["--config", "configs/grid_search_tabpfn.yaml"],
             "console": "integratedTerminal"
         },
         {
@@ -33,6 +41,29 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/compare_fire_detectors.py",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Realtime MLP",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/realtime_mlp.py",
+            "args": ["--config", "configs/best_model.yaml"],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Realtime TabPFN",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/realtime_tabpfn.py",
+            "args": ["--config", "configs/best_model.yaml"],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Realtime Simple (Threshold)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/realtime_mlp.py",
             "console": "integratedTerminal"
         }
     ]

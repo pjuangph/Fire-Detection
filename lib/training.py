@@ -1,26 +1,19 @@
-"""Training pipeline: data loading, splitting, oversampling, and model training."""
+"""Shared training data pipeline: loading, splitting, and oversampling."""
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-import torch
-import torch.nn as nn
-from tqdm import trange
 
 from lib import group_files_by_flight, compute_grid_extent, build_pixel_table
 from lib.features import build_location_features
-from lib.losses import SoftErrorRateLoss, compute_pixel_weights
-from lib.inference import FireMLP, FEATURE_NAMES
-from lib.evaluation import get_device
+from lib.losses import compute_pixel_weights
 
 # Type aliases
 NDArrayFloat = npt.NDArray[np.floating[Any]]
 FlightFeatures = dict[str, dict[str, Any]]
-TrainResult = dict[str, Any]
 
 
 # ── Data Pipeline ─────────────────────────────────────────────
@@ -153,132 +146,3 @@ def oversample_minority(
 
     perm = rng.permutation(len(X_bal))
     return X_bal[perm], y_bal[perm], w_bal[perm]
-
-
-# ── Training ─────────────────────────────────────────────────
-
-
-def train_model(
-    X_train: NDArrayFloat,
-    y_train: NDArrayFloat,
-    w_train: NDArrayFloat,
-    n_epochs: int = 100,
-    lr: float = 1e-3,
-    batch_size: int = 4096,
-    loss_fn: str = 'bce',
-    hidden_layers: list[int] | None = None,
-    P_total: float | None = None,
-    quiet: bool = False,
-    resume_from: str | None = None,
-    save_path: str | None = None,
-    save_every: int = 25,
-) -> TrainResult:
-    """Train FireMLP with the selected loss function.
-
-    Args:
-        quiet: If True, suppress per-epoch progress bar.
-        resume_from: Checkpoint path to resume training from.
-        save_path: If set, save checkpoint to this path periodically.
-        save_every: Save checkpoint every N epochs (default 25).
-
-    Returns:
-        Dict with keys: model, loss_history, epochs_completed,
-        optimizer_state, scheduler_state.
-    """
-    device = get_device()
-    if not quiet:
-        print(f'  Device: {device}')
-
-    model = FireMLP(hidden_layers=hidden_layers).to(device)
-    use_error_rate = loss_fn == 'error-rate'
-    if use_error_rate:
-        if P_total is None:
-            P_total = float(y_train.sum())
-        criterion = SoftErrorRateLoss(P_total).to(device)
-        loss_label = f'Soft (FN+FP)/P, P={P_total:.0f}'
-    else:
-        criterion = nn.BCEWithLogitsLoss(reduction='none')
-        loss_label = 'Pixel Weighted BCE'
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs)
-
-    # Resume from checkpoint if provided
-    start_epoch = 0
-    if resume_from and os.path.isfile(resume_from):
-        ckpt = torch.load(resume_from, weights_only=False, map_location=device)
-        model.load_state_dict(ckpt['model_state'])
-        if 'optimizer_state' in ckpt:
-            optimizer.load_state_dict(ckpt['optimizer_state'])
-        if 'scheduler_state' in ckpt:
-            scheduler.load_state_dict(ckpt['scheduler_state'])
-        start_epoch = ckpt.get('epochs_completed', 0)
-        if not quiet:
-            print(f'  Resuming from epoch {start_epoch}/{n_epochs}')
-
-    if start_epoch >= n_epochs:
-        model = model.cpu()
-        return {
-            'model': model,
-            'loss_history': np.zeros((0, 1)),
-            'epochs_completed': n_epochs,
-            'optimizer_state': optimizer.state_dict(),
-            'scheduler_state': scheduler.state_dict(),
-        }
-
-    X_t = torch.tensor(X_train, dtype=torch.float32)
-    y_t = torch.tensor(y_train, dtype=torch.float32)
-    w_t = torch.tensor(w_train, dtype=torch.float32)
-
-    dataset = torch.utils.data.TensorDataset(X_t, y_t, w_t)
-    loader = torch.utils.data.DataLoader(
-        dataset, batch_size=batch_size, shuffle=True)
-
-    remaining = n_epochs - start_epoch
-    loss_history = np.zeros((remaining, 1))
-    pbar = trange(remaining, desc=loss_label, disable=quiet)
-    for i in pbar:
-        epoch = start_epoch + i
-        model.train()
-        total_loss = 0.0
-        for X_batch, y_batch, w_batch in loader:
-            X_batch = X_batch.to(device)
-            y_batch = y_batch.to(device)
-            w_batch = w_batch.to(device)
-            optimizer.zero_grad()
-            logits = model(X_batch)
-            if use_error_rate:
-                loss = criterion(logits, y_batch, w_batch)
-            else:
-                loss_per_sample = criterion(logits, y_batch)
-                loss = (loss_per_sample * w_batch).mean()
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item() * len(X_batch)
-
-        scheduler.step()
-        avg_loss = total_loss / len(X_t)
-        loss_history[i] = avg_loss
-        cur_lr = scheduler.get_last_lr()[0]
-        if not quiet:
-            pbar.set_postfix({'loss': f'{avg_loss:.4e}', 'lr': f'{cur_lr:.1e}',
-                              'ep': f'{epoch + 1}/{n_epochs}'})
-
-        # Periodic checkpoint save for crash recovery
-        epochs_done = start_epoch + i + 1
-        if save_path and save_every > 0 and epochs_done % save_every == 0:
-            torch.save({
-                'model_state': model.state_dict(),
-                'optimizer_state': optimizer.state_dict(),
-                'scheduler_state': scheduler.state_dict(),
-                'epochs_completed': epochs_done,
-                'hidden_layers': hidden_layers or [64, 32],
-            }, save_path)
-
-    model = model.cpu()
-    return {
-        'model': model,
-        'loss_history': loss_history,
-        'epochs_completed': n_epochs,
-        'optimizer_state': optimizer.state_dict(),
-        'scheduler_state': scheduler.state_dict(),
-    }
