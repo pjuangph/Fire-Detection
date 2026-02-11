@@ -20,7 +20,8 @@ import numpy as np
 import numpy.typing as npt
 
 from lib import group_files_by_flight, compute_grid_extent, build_pixel_table
-from lib.inference import FireMLP, FEATURE_NAMES, load_model, predict
+from models.firemlp import FireMLP
+from lib.inference import FEATURE_NAMES, load_model, predict
 from lib.features import build_location_features
 
 # StandardScaler type used in function signatures

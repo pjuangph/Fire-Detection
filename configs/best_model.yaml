@@ -1,0 +1,23 @@
+detector: ml
+checkpoint: checkpoint/fire_detector_best.pt
+threshold: 0.5
+training:
+  loss: error-rate
+  layers:
+  - 128
+  - 64
+  - 32
+  learning_rate: 0.0001
+  epochs: 100
+  importance_weights:
+    gt: 10
+    fire: 5
+    other: 1
+metrics:
+  error_rate: 0.031318923687692984
+  precision: 0.9761491760624458
+  recall: 0.9929422143802382
+  TP: 9004
+  FP: 220
+  FN: 64
+  TN: 519559

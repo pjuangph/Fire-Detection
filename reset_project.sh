@@ -17,7 +17,7 @@
 #   plotdata.py              → plots/radiance_overview.png, georeferenced_thermal.png
 #
 # Stale/orphaned plots (old model or no generating script):
-#   fire_ml.py (old 4-feat)  → plots/ml_*.png
+#   (deleted fire_ml.py)     → plots/ml_*.png
 #   (no script)              → plots/blackbody_temperatures.png
 
 set -euo pipefail
@@ -45,7 +45,7 @@ delete_model() {
 }
 
 delete_stale_plots() {
-    echo "Cleaning stale/orphaned plots (old fire_ml.py + blackbody)..."
+    echo "Cleaning stale/orphaned plots (old fire_ml.py outputs + blackbody)..."
     rm_if_exists plots/ml_decision_boundary.png
     rm_if_exists plots/ml_training_loss.png
     for f in plots/ml_prediction_map_*.png; do

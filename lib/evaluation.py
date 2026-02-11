@@ -8,8 +8,6 @@ import numpy as np
 import numpy.typing as npt
 import torch
 
-from lib.inference import FireMLP
-
 NDArrayFloat = npt.NDArray[np.floating[Any]]
 Metrics = dict[str, int | float]
 
@@ -24,18 +22,18 @@ def get_device() -> torch.device:
 
 
 def evaluate(
-    model: FireMLP,
+    model: Any,
     X: NDArrayFloat,
     y: NDArrayFloat,
     threshold: float = 0.5,
 ) -> tuple[Metrics, NDArrayFloat]:
     """Evaluate model with absolute count metrics.
 
-    Computes confusion matrix (TP, FP, FN, TN) and derived metrics.
-    Uses absolute counts per user preference (not percentages).
+    Supports both PyTorch models (FireMLP) and sklearn-compatible models
+    (TabPFNClassifier) via duck-typing.
 
     Args:
-        model: Trained model to evaluate.
+        model: Trained model (FireMLP or sklearn-compatible with predict_proba).
         X: Normalized feature array of shape (N, 12).
         y: Ground truth labels of shape (N,).
         threshold: Classification threshold for P(fire). Default 0.5.
@@ -45,10 +43,15 @@ def evaluate(
             - metrics: Dict with TP, FP, FN, TN, precision, recall
             - probs: Array of P(fire) predictions of shape (N,)
     """
-    model.eval()
-    with torch.no_grad():
-        logits = model(torch.tensor(X, dtype=torch.float32))
-        probs = torch.sigmoid(logits).numpy()
+    if hasattr(model, 'predict_proba'):
+        # sklearn-compatible (TabPFN, etc.)
+        probs = model.predict_proba(X)[:, 1].astype(np.float32)
+    else:
+        # PyTorch (FireMLP)
+        model.eval()
+        with torch.no_grad():
+            logits = model(torch.tensor(X, dtype=torch.float32))
+            probs = torch.sigmoid(logits).numpy()
 
     preds = (probs >= threshold).astype(np.float32)
 
@@ -67,12 +70,7 @@ def evaluate(
 
 
 def print_metrics(metrics: Metrics, label: str = '') -> None:
-    """Print evaluation metrics to stdout.
-
-    Args:
-        metrics: Dict with TP, FP, FN, TN, precision, recall.
-        label: Optional label prefix for output.
-    """
+    """Print evaluation metrics to stdout."""
     m = metrics
     header = f'  {label} ' if label else '  '
     print(f'{header}Absolute counts:')

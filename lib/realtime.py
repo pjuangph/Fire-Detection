@@ -1,34 +1,9 @@
-"""realtime_fire.py - Simulate real-time fire detection as the plane sweeps.
-
-Processes each flight line one at a time, incrementally building a mosaic
-and applying multi-pass fire detection. Outputs one PNG per sweep so
-the evolution of fire detection can be animated as a GIF.
-
-Day/night is auto-detected per sweep from VNIR radiance levels: if NIR
-has meaningful signal, there's sunlight and NDVI vegetation is shown.
-This is more robust than Solar Zenith Angle because it also handles
-cloud cover (no solar signal even when geometrically daytime).
-
-The operator view shows:
-  - Green: vegetation (NDVI, when sunlight detected)
-  - T4 thermal background (when no sunlight)
-  - Red: predicted fire locations
-  - Fire zone labels with area in m² or hectares
-  - Running statistics (fire count, total area, zone breakdown)
-
-Usage:
-    python realtime_fire.py                                   # threshold detector
-    python realtime_fire.py --config configs/best_model.yaml  # ML from config
-"""
+"""Shared rendering and simulation logic for real-time fire detection."""
 
 from __future__ import annotations
 
-import argparse
 import os
-import sys
-from typing import Any, Dict
-
-import yaml
+from typing import Any
 
 import numpy as np
 import matplotlib
@@ -36,15 +11,11 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
+
 from lib import (
-    group_files_by_flight,
-    compute_ndvi, init_grid_state, process_sweep, get_fire_mask,
+    compute_ndvi, process_sweep, get_fire_mask,
     detect_fire_zones, compute_cell_area_m2, format_area,
-    load_fire_model,
 )
-
-
-# ── Rendering ─────────────────────────────────────────────────
 
 
 def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
@@ -52,13 +23,7 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
                  flight_num: str, comment: str,
                  outdir: str, cell_area_m2: float,
                  detector_name: str = 'simple') -> str:
-    """Render one frame of the real-time simulation as a PNG.
-
-    Background layer is chosen by checking if the grid has accumulated
-    usable VNIR data (any finite NIR pixels), not by the last sweep's
-    day/night flag. This way, daytime VNIR data persists even after
-    nighttime sweeps are processed.
-    """
+    """Render one frame of the real-time simulation as a PNG."""
     plt.rcParams.update({'font.size': 18})
 
     has_vnir = np.any(np.isfinite(gs['NIR']))
@@ -116,7 +81,6 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
             cy = lat_axis[0] + (lat_axis[-1] - lat_axis[0]) * zr.mean() / max(len(lat_axis) - 1, 1)
             cx = lon_axis[0] + (lon_axis[-1] - lon_axis[0]) * zc.mean() / max(len(lon_axis) - 1, 1)
 
-            # Bounding box around fire zone
             r_min, r_max = zr.min(), zr.max()
             c_min, c_max = zc.min(), zc.max()
             lat_top = lat_axis[0] + (lat_axis[-1] - lat_axis[0]) * r_min / max(len(lat_axis) - 1, 1)
@@ -178,7 +142,6 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
     ax.set_ylabel('Latitude', fontsize=18)
     ax.tick_params(labelsize=18)
 
-    # Legend for fire overlay colors
     legend_elements = [
         Line2D([0], [0], marker='o', color='w', markerfacecolor='red',
                markersize=8, label='Thermal fire'),
@@ -197,27 +160,11 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
     return outpath
 
 
-# ── Simulation ────────────────────────────────────────────────
-
-
 def simulate_flight(flight_num: str, files: list[str],
-                    comment: str, gs: Dict[str, Any],
+                    comment: str, gs: dict[str, Any],
                     ml_model: Any = None,
                     detector_name: str = 'simple') -> None:
-    """Simulate real-time fire detection for one flight.
-
-    Day/night is auto-detected per sweep from VNIR radiance.
-
-    Args:
-        flight_num: flight identifier (e.g. '24-801-04').
-        files: list of HDF file paths for this flight.
-        comment: flight comment from HDF metadata.
-        gs: Dictionary of data that is updated by process_sweep.
-        ml_model: optional MLFireDetector. When provided, overrides the
-                  threshold-based fire mask with ML predictions from
-                  accumulated aggregate features.
-        detector_name: 'simple' or 'ml', used in output filenames.
-    """
+    """Simulate real-time fire detection for one flight."""
     print('=' * 60)
     print(f'Real-Time Fire Detection Simulation')
     print(f'Flight {flight_num}: {comment}')
@@ -239,7 +186,6 @@ def simulate_flight(flight_num: str, files: list[str],
             filepath, gs, pixel_rows, day_night='auto',
             flight_num=flight_num)
 
-        # Recompute cell area from current grid center (updates after expansion)
         lat_center = (gs['lat_min'] + gs['lat_max']) / 2
         cell_area = compute_cell_area_m2(lat_center)
 
@@ -285,46 +231,3 @@ def simulate_flight(flight_num: str, files: list[str],
     print(f'    convert -delay 50 -loop 0 '
           f'{outdir}/{detector_name}-{flight_clean}-*.png '
           f'{outdir}/{detector_name}-{flight_clean}.gif')
-
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description='Real-time fire detection simulation')
-    parser.add_argument(
-        '--config', type=str, default=None,
-        help='Path to model config YAML (e.g. configs/best_model.yaml)')
-    args = parser.parse_args()
-
-    # Load ML config from YAML, or fall back to simple threshold detector
-    ml_model = None
-    detector = 'simple'
-    if args.config:
-        with open(args.config) as f:
-            model_cfg = yaml.safe_load(f)
-        detector = model_cfg.get('detector', 'ml')
-        model_path = model_cfg['checkpoint']
-        threshold = model_cfg.get('threshold')
-        ml_model = load_fire_model(model_path, threshold=threshold)
-        if ml_model is None:
-            print(f'ERROR: checkpoint not found: {model_path}',
-                  file=sys.stderr)
-            sys.exit(1)
-        print(f'Using ML fire detector ({args.config})')
-    else:
-        print('Using threshold fire detector (simple)')
-
-    flights = group_files_by_flight()
-    gs = init_grid_state()  # empty, grows dynamically per sweep
-
-    print(f'\nScanned {len(flights)} flights:')
-    for fnum, info in sorted(flights.items()):
-        print(f'  {fnum}: {len(info["files"])} lines \u2014 {info["comment"]}')
-    print()
-    for fnum, info in sorted(flights.items()):
-        simulate_flight(fnum, info['files'], info['comment'], gs,
-                        ml_model=ml_model, detector_name=detector)
-
-    print('All simulations complete.')
-
-
-if __name__ == '__main__':
-    main()

@@ -1,12 +1,12 @@
 # Grid search configuration for fire detection MLP tuning.
 #
 # Usage:
-#   python tune_fire_prediction.py --config configs/grid_search.yaml
+#   python train_mlp.py --config configs/grid_search_mlp.yaml
 #
 # The search iterates over all combinations of the parameters below.
 # For error-rate loss, importance_weights are ignored (uniform weights used).
 #
-# Grid size: BCE 3x3x3=27 + Error-rate 3x3=9 = 36 total runs.
+# Grid size: BCE 4x3x3=36 + Error-rate 4x3=12 = 48 total runs.
 
 epochs: 100
 batch_size: 4096

@@ -557,7 +557,7 @@ Unlike `mosaic_flight.py` which pre-scans all files to determine the grid bounds
 
 ## ML Fire Detection
 
-`fire_ml.py` trains a neural network to classify fire vs. non-fire pixels using 4 spectral features.
+`tune_fire_prediction.py` trains a neural network to classify fire vs. non-fire locations using 12 aggregate features, with YAML-driven grid search over loss function, architecture, learning rate, and importance weights.
 
 ### Features
 
@@ -694,7 +694,8 @@ The script will prompt for your NASA Earthdata credentials on first run and cach
 | `plot_burn_locations.py` | Per-flight 2x2 analysis: burn locations, T4, SWIR, and detection space scatter |
 | `plot_vegetation.py` | 2x2 NDVI vegetation maps with fire overlay (daytime flights) |
 | `realtime_fire.py` | Real-time sweep-by-sweep fire detection simulation with fire zone labels |
-| `fire_ml.py` | Train ML fire detector with Dice Loss using T4, T11, ΔT, SWIR features |
+| `tune_fire_prediction.py` | YAML-driven grid search for MLP fire detector (loss, architecture, LR, weights) |
+| `compare_fire_detectors.py` | Per-flight ML vs threshold comparison table |
 
 ```bash
 python detect_fire.py
@@ -727,14 +728,11 @@ This produces one PNG per flight in `plots/`, each with a 2x2 layout (burn locat
 - `burn_locations_2480106.png` — Third fire flight (Blowdown)
 
 ```bash
-python fire_ml.py
+python tune_fire_prediction.py --config configs/grid_search.yaml
+python tune_fire_prediction.py --loss bce --layers 64 64 64 32   # single run
 ```
 
-This trains the ML model and produces:
-- `ml_training_loss.png` — Dice Loss convergence curve
-- `ml_decision_boundary.png` — Learned decision boundary vs threshold lines
-- `ml_prediction_map_2480106.png` — Spatial fire predictions on test flight
-- `ml_fpfn_comparison_2480106.png` — FP/FN spatial map
+Grid search results are saved to `results/grid_search_results.json`. The best model is automatically copied to `checkpoint/fire_detector_best.pt` for use by `realtime_fire.py --detector ml`.
 
 ### Data
 

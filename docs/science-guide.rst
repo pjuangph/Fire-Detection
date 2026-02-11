@@ -590,66 +590,73 @@ See :func:`lib.fire.detect_fire_zones`.
 ML Fire Detection
 -----------------
 
-``fire_ml.py`` trains a neural network to classify fire vs non-fire
-pixels.
+``tune_fire_prediction.py`` trains a neural network to classify fire vs
+non-fire locations using 12 aggregate features per grid cell.
 
-Features
-^^^^^^^^
+Features (12 per location)
+^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. list-table::
    :header-rows: 1
-   :widths: 15 25 15 45
+   :widths: 20 80
 
    * - Feature
-     - Source
-     - Units
-     - Why
-   * - T4
-     - Channel 31 (3.9 :math:`\mu`\ m)
-     - K
-     - Primary fire signal
-   * - T11
-     - Channel 48 (11.3 :math:`\mu`\ m)
-     - K
-     - Background temperature
-   * - :math:`\Delta T`
-     - T4 - T11
-     - K
-     - Spectral fingerprint
-   * - SWIR
-     - Channel 22 (2.2 :math:`\mu`\ m)
-     - W/m\ :sup:`2`/sr/:math:`\mu`\ m
-     - Solar reflection discriminator
+     - Description
+   * - T4_max
+     - Maximum T4 brightness temperature across sweeps
+   * - T4_mean
+     - Mean T4 brightness temperature
+   * - T11_mean
+     - Mean T11 brightness temperature
+   * - dT_max
+     - Maximum T4 - T11 spectral difference
+   * - SWIR_max
+     - Maximum SWIR radiance
+   * - SWIR_mean
+     - Mean SWIR radiance
+   * - Red_mean
+     - Mean Red radiance
+   * - NIR_mean
+     - Mean NIR radiance
+   * - NDVI_min
+     - Minimum NDVI (post-fire drop)
+   * - NDVI_mean
+     - Mean NDVI
+   * - NDVI_drop
+     - NDVI baseline minus minimum (vegetation loss)
+   * - obs_count
+     - Number of valid observations at this location
 
 Architecture
 ^^^^^^^^^^^^
 
-::
+Variable MLP architecture tuned via YAML grid search::
 
-   Input (4) --> Linear(64) --> ReLU --> Linear(32) --> ReLU --> Linear(1) --> Sigmoid
+   Input (12) --> [hidden layers] --> Linear(1) --> Sigmoid
 
-2,337 trainable parameters.
+Example: ``12 -> 64 -> 64 -> 64 -> 32 -> 1``
 
-Loss Function
-^^^^^^^^^^^^^
+Loss Functions
+^^^^^^^^^^^^^^
 
-Combined **Dice + BCE** loss (50/50 weight):
+Two loss functions compared via grid search:
 
-.. math::
+1. **Weighted BCE:** Per-pixel importance weights encode domain knowledge
+   (ground truth flight > fire pixels > other pixels). Configurable
+   importance parameters.
 
-   \mathcal{L}_\text{Dice} = 1 - \frac{2 \cdot TP}{2 \cdot TP + FP + FN}
-
-True negatives (TN) **do not appear** in the Dice formula. This makes
-the loss insensitive to the massive class imbalance (~99.4% non-fire).
-BCE provides per-pixel gradient signals for early training convergence.
+2. **SoftErrorRateLoss:** Directly optimizes (FN + FP) / P where P is
+   total fire pixels. Uses uniform weights with minority oversampling.
 
 Training
 ^^^^^^^^
 
-- **Train flights:** 03 (pre-burn) + 04 (day burn) + 05 (night burn)
-- **Test flight:** 06 (day burn, unseen)
+- **Train flights:** 04 (day burn) + 05 (night burn), plus 80% of 03 (pre-burn, labels forced to 0)
+- **Test flight:** 06 (day burn, unseen), plus 20% of 03
 - **Labels:** Pseudo-labels from the threshold detector
 - **Class balancing:** Minority class (fire) oversampled to 50/50
+- **LR schedule:** Cosine annealing over configured epochs
+- **Grid search:** YAML config iterates over loss x architecture x LR x importance weights
 
 
 Assumptions and Limitations

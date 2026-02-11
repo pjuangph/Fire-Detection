@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import torch
 from sklearn.preprocessing import StandardScaler
 
-from lib.inference import FireMLP
+from models.firemlp import FireMLP
 
 NDArrayFloat = npt.NDArray[np.floating[Any]]
 FlightFeatures = dict[str, dict[str, Any]]
