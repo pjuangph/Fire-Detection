@@ -29,11 +29,19 @@
             "console": "integratedTerminal"
         },
         {
-            "name": "TabPFN Grid Search",
+            "name": "TabPFN Classification Grid Search",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/train_tabpfn.py",
-            "args": ["--config", "configs/grid_search_tabpfn.yaml"],
+            "program": "${workspaceFolder}/train_tabpfn_classification.py",
+            "args": ["--config", "configs/grid_search_tabpfn_classification.yaml"],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "TabPFN Regression Grid Search",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/train_tabpfn_regression.py",
+            "args": ["--config", "configs/grid_search_tabpfn_regression.yaml"],
             "console": "integratedTerminal"
         },
         {

@@ -1,4 +1,4 @@
-"""train_tabpfn.py - From-scratch TabPFN training for fire detection.
+"""train_tabpfn_classification.py - From-scratch TabPFN classification training.
 
 Initializes TabPFN with random weights (model_path="random:<seed>") so no
 pretrained checkpoint download is needed. Trains the transformer with gradient
@@ -9,7 +9,7 @@ weight_decay, and grad_clip_norm. Results are saved to JSON. The best model
 checkpoint includes a representative training context for inference.
 
 Usage:
-    python train_tabpfn.py --config configs/grid_search_tabpfn.yaml
+    python train_tabpfn_classification.py --config configs/grid_search_tabpfn_classification.yaml
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ from lib import group_files_by_flight
 from lib.inference import FEATURE_NAMES
 from lib.evaluation import evaluate
 from lib.training import (
-    load_all_data, extract_train_test,
+    load_all_data,
     FlightFeatures,
 )
 
@@ -427,11 +427,24 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
               f'{n_resume} under-trained (will resume), '
               f'{len(combos) - len(existing_by_key)} new')
 
-    # Fit scaler once on all data
-    all_X = np.concatenate([ff['X'] for ff in flight_features.values()])
-    all_X = np.where(np.isfinite(all_X), all_X, 0.0).astype(np.float32)
+    # Build full dataset — ground truth flight (pre-burn) forced to y=0
+    gt_flight = '24-801-03'
+    X_parts, y_parts = [], []
+    for fnum, ff in flight_features.items():
+        X_parts.append(ff['X'])
+        if fnum == gt_flight:
+            y_parts.append(np.zeros(len(ff['X']), dtype=np.float32))
+        else:
+            y_parts.append(ff['y'])
+    X_all = np.concatenate(X_parts)
+    y_all = np.concatenate(y_parts)
+
+    # Fit scaler once on all features, then normalize
+    X_clean = np.where(np.isfinite(X_all), X_all, 0.0).astype(np.float32)
     scaler = StandardScaler()
-    scaler.fit(all_X)
+    scaler.fit(X_clean)
+    X_norm = scaler.transform(X_clean).astype(np.float32)
+    y_norm = y_all.astype(np.float32)
 
     os.makedirs('checkpoint', exist_ok=True)
     results: list[dict[str, Any]] = [
@@ -439,20 +452,6 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         if r.get('epochs_completed', 0) >= epochs
     ]
     n_combos = len(combos)
-
-    # Build full dataset (train_tabpfn_model splits internally)
-    X_train, y_train, _w_train, X_test, y_test, _w_test = extract_train_test(
-        flight_features,
-        train_flights=['24-801-04', '24-801-05'],
-        test_flights=['24-801-06'],
-        ground_truth_flight='24-801-03',
-        gt_test_ratio=0.2,
-    )
-    X_all = np.concatenate([X_train, X_test])
-    y_all = np.concatenate([y_train, y_test])
-    X_all_clean = np.where(np.isfinite(X_all), X_all, 0.0).astype(np.float32)
-    X_norm = scaler.transform(X_all_clean).astype(np.float32)
-    y_norm = y_all.astype(np.float32)
 
     for i, combo in enumerate(combos):
         run_id = i + 1
@@ -641,12 +640,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description='Train TabPFN fire detector from scratch via grid search')
     parser.add_argument(
-        '--config', type=str, default='configs/grid_search_tabpfn.yaml',
+        '--config', type=str, default='configs/grid_search_tabpfn_classification.yaml',
         help='Path to YAML grid search config')
     args = parser.parse_args()
 
     print('=' * 60)
-    print('ML Fire Detection \u2014 TabPFN From-Scratch Training')
+    print('ML Fire Detection \u2014 TabPFN Classification Training')
     print('=' * 60)
     print('\n--- Loading flight data ---')
     flights = group_files_by_flight()
@@ -661,7 +660,7 @@ def main() -> None:
     print(f'\nConfig: {config_path}')
     print(f'Runs: {len(combos)} | Epochs: {cfg.get("epochs", 10)} | Metric: {metric}')
 
-    results_path = 'results/grid_search_tabpfn_results.json'
+    results_path = 'results/grid_search_tabpfn_classification_results.json'
     results = run_grid_search(cfg, flight_features,
                               config_path=config_path,
                               results_path=results_path)

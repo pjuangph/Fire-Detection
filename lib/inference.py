@@ -100,7 +100,11 @@ def _find_checkpoint(
     if model_path and os.path.isfile(model_path):
         return model_path
 
-    if model_type == 'tabpfn':
+    if model_type == 'tabpfn_regression':
+        candidates = [
+            'checkpoint/fire_detector_tabpfn_regression_best.pt',
+        ]
+    elif model_type == 'tabpfn':
         candidates = [
             'checkpoint/fire_detector_tabpfn_best.pt',
         ]
@@ -122,17 +126,19 @@ def load_fire_model(
     model_path: str | None = None,
     threshold: float | None = None,
     model_type: str = 'firemlp',
-) -> '_MLFireDetector | _TabPFNFireDetector | None':
+) -> '_MLFireDetector | _TabPFNFireDetector | _TabPFNRegressionDetector | None':
     """Load trained ML fire detector for realtime use. Returns None if not found.
 
     Args:
         model_path: Explicit checkpoint path, or None for auto-discovery.
         threshold: Override classification threshold (default: use checkpoint value).
-        model_type: 'firemlp' or 'tabpfn'.
+        model_type: 'firemlp', 'tabpfn', or 'tabpfn_regression'.
     """
     path = _find_checkpoint(model_path, model_type=model_type)
     if path is None:
         return None
+    if model_type == 'tabpfn_regression':
+        return _TabPFNRegressionDetector(path, threshold=threshold)
     if model_type == 'tabpfn':
         return _TabPFNFireDetector(path, threshold=threshold)
     return _MLFireDetector(path, threshold=threshold)
