@@ -60,10 +60,18 @@
             "console": "integratedTerminal"
         },
         {
-            "name": "Realtime TabPFN",
+            "name": "Realtime TabPFN Classification",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/realtime_tabpfn.py",
+            "program": "${workspaceFolder}/realtime_tabpfn_classification.py",
+            "args": ["--config", "configs/best_model.yaml"],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Realtime TabPFN Regression",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/realtime_tabpfn_regression.py",
             "args": ["--config", "configs/best_model.yaml"],
             "console": "integratedTerminal"
         },

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import platform
 from typing import Any
 
 import numpy as np
@@ -19,6 +20,18 @@ def get_device() -> torch.device:
     if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
         return torch.device('mps')
     return torch.device('cpu')
+
+
+def auto_device() -> str:
+    """Return best available device as a string for TabPFN.
+
+    On macOS prefers MPS if available, otherwise CUDA > CPU.
+    """
+    if platform.system() == "Darwin":
+        mps_ok = (hasattr(torch.backends, "mps")
+                  and torch.backends.mps.is_available())
+        return "mps" if mps_ok else "cpu"
+    return "cuda:0" if torch.cuda.is_available() else "cpu"
 
 
 def evaluate(

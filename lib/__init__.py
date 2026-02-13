@@ -25,10 +25,12 @@ from lib.stats import (
 )
 from lib.features import build_location_features
 from lib.losses import SoftErrorRateLoss, compute_pixel_weights
-from lib.evaluation import get_device, evaluate, print_metrics
+from lib.evaluation import get_device, auto_device, evaluate, print_metrics
 from lib.plotting import (
     plot_training_loss, plot_probability_hist, plot_prediction_map,
 )
 from lib.training import (
     load_all_data, extract_train_test, oversample_minority,
+    load_existing_results, save_incremental,
+    build_representative_context, safe_split, make_splitter,
 )

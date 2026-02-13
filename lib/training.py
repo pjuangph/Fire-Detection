@@ -1,11 +1,16 @@
-"""Shared training data pipeline: loading, splitting, and oversampling."""
+"""Shared training data pipeline: loading, splitting, oversampling, and grid search helpers."""
 
 from __future__ import annotations
 
+import json
+import os
+from datetime import datetime
+from functools import partial
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
+from sklearn.model_selection import train_test_split
 
 from lib import group_files_by_flight, compute_grid_extent, build_pixel_table
 from lib.features import build_location_features
@@ -146,3 +151,67 @@ def oversample_minority(
 
     perm = rng.permutation(len(X_bal))
     return X_bal[perm], y_bal[perm], w_bal[perm]
+
+
+# ── Grid Search Helpers ──────────────────────────────────────
+
+
+def load_existing_results(results_path: str) -> list[dict[str, Any]]:
+    """Load previously completed results from JSON (for restart)."""
+    if not os.path.isfile(results_path):
+        return []
+    with open(results_path) as f:
+        data = json.load(f)
+    return data.get('results', [])
+
+
+def save_incremental(results: list[dict[str, Any]], cfg: dict[str, Any],
+                     config_path: str, results_path: str) -> None:
+    """Save results to JSON after each run (crash-safe)."""
+    os.makedirs(os.path.dirname(results_path) or '.', exist_ok=True)
+    metric = cfg.get('metric', 'error_rate')
+    output = {
+        'config': config_path,
+        'timestamp': datetime.now().isoformat(),
+        'metric': metric,
+        'results': results,
+    }
+    if results:
+        best = min(results, key=lambda r: r.get(metric, float('inf')))
+        output['best_run_id'] = best['run_id']
+        output[f'best_{metric}'] = best[metric]
+    with open(results_path, 'w') as f:
+        json.dump(output, f, indent=2)
+
+
+def build_representative_context(
+    X: NDArrayFloat, y: NDArrayFloat, batch_size: int, seed: int,
+) -> tuple[NDArrayFloat, NDArrayFloat]:
+    """Build a balanced (stratified) context subset for inference checkpoint."""
+    rng = np.random.default_rng(seed)
+    fire_idx = np.where(y == 1)[0]
+    nofire_idx = np.where(y == 0)[0]
+
+    half = batch_size // 2
+    n_fire = min(half, len(fire_idx))
+    n_nofire = min(batch_size - n_fire, len(nofire_idx))
+
+    fire_sel = rng.choice(fire_idx, n_fire, replace=len(fire_idx) < n_fire)
+    nofire_sel = rng.choice(nofire_idx, n_nofire, replace=len(nofire_idx) < n_nofire)
+
+    idx = np.concatenate([fire_sel, nofire_sel])
+    rng.shuffle(idx)
+    return X[idx].copy(), y[idx].copy()
+
+
+def safe_split(*args: Any, stratify: Any = None, **kwargs: Any) -> Any:
+    """train_test_split that falls back to non-stratified when a class has < 2 members."""
+    try:
+        return train_test_split(*args, stratify=stratify, **kwargs)
+    except ValueError:
+        return train_test_split(*args, stratify=None, **kwargs)
+
+
+def make_splitter(test_size: float = 0.2, seed: int = 0) -> Any:
+    """Return a partial-applied safe_split for use with TabPFN data utils."""
+    return partial(safe_split, test_size=test_size, random_state=seed)

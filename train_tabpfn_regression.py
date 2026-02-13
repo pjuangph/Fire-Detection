@@ -18,12 +18,8 @@ from __future__ import annotations
 
 import argparse
 import itertools
-import json
 import os
-import platform
 import shutil
-from datetime import datetime
-from functools import partial
 from typing import Any
 
 import numpy as np
@@ -46,8 +42,10 @@ from tabpfn.finetuning.data_util import (
 
 from lib import group_files_by_flight
 from lib.inference import FEATURE_NAMES
+from lib.evaluation import auto_device
 from lib.training import (
-    load_all_data,
+    load_all_data, load_existing_results, save_incremental,
+    build_representative_context, make_splitter,
     FlightFeatures,
 )
 
@@ -56,39 +54,7 @@ NDArrayFloat = npt.NDArray[np.floating[Any]]
 TrainResult = dict[str, Any]
 
 
-# ── Device Detection ──────────────────────────────────────────
-
-
-def _auto_device() -> str:
-    """Return best available device string for TabPFN."""
-    if platform.system() == "Darwin":
-        mps_ok = (hasattr(torch.backends, "mps")
-                  and torch.backends.mps.is_available())
-        return "mps" if mps_ok else "cpu"
-    return "cuda:0" if torch.cuda.is_available() else "cpu"
-
-
 # ── TabPFN Regression Training ───────────────────────────────
-
-
-def _build_representative_context(
-    X: NDArrayFloat, y: NDArrayFloat, batch_size: int, seed: int,
-) -> tuple[NDArrayFloat, NDArrayFloat]:
-    """Build a balanced (stratified) context subset for inference checkpoint."""
-    rng = np.random.default_rng(seed)
-    fire_idx = np.where(y == 1)[0]
-    nofire_idx = np.where(y == 0)[0]
-
-    half = batch_size // 2
-    n_fire = min(half, len(fire_idx))
-    n_nofire = min(batch_size - n_fire, len(nofire_idx))
-
-    fire_sel = rng.choice(fire_idx, n_fire, replace=len(fire_idx) < n_fire)
-    nofire_sel = rng.choice(nofire_idx, n_nofire, replace=len(nofire_idx) < n_nofire)
-
-    idx = np.concatenate([fire_sel, nofire_sel])
-    rng.shuffle(idx)
-    return X[idx].copy(), y[idx].copy()
 
 
 def train_tabpfn_model(
@@ -138,7 +104,7 @@ def train_tabpfn_model(
         Dict with model, regressor, loss_history, epochs_completed,
         optimizer_state, regressor_init, X_train, y_train, X_test, y_test.
     """
-    device_str = _auto_device()
+    device_str = auto_device()
     if not quiet:
         print(f'  Device: {device_str}')
 
@@ -203,15 +169,7 @@ def train_tabpfn_model(
         return early_result
 
     rng = np.random.default_rng(seed)
-
-    def _safe_split(*args, stratify=None, **kwargs):
-        """Split that falls back to non-stratified when a class has < 2 members."""
-        try:
-            return train_test_split(*args, stratify=stratify, **kwargs)
-        except ValueError:
-            return train_test_split(*args, stratify=None, **kwargs)
-
-    splitter = partial(_safe_split, test_size=0.2, random_state=seed)
+    splitter = make_splitter(test_size=0.2, seed=seed)
 
     remaining = n_epochs - start_epoch
     loss_history = np.zeros((remaining, 1))
@@ -403,34 +361,6 @@ def _combo_key(combo: dict[str, Any]) -> str:
             f"|{combo['crps_loss_weight']}|{combo['mse_loss_weight']}")
 
 
-def _load_existing_results(results_path: str) -> list[dict[str, Any]]:
-    """Load previously completed results from JSON (for restart)."""
-    if not os.path.isfile(results_path):
-        return []
-    with open(results_path) as f:
-        data = json.load(f)
-    return data.get('results', [])
-
-
-def _save_incremental(results: list[dict[str, Any]], cfg: dict[str, Any],
-                      config_path: str, results_path: str) -> None:
-    """Save results to JSON after each run (crash-safe)."""
-    os.makedirs(os.path.dirname(results_path) or '.', exist_ok=True)
-    metric = cfg.get('metric', 'error_rate')
-    output = {
-        'config': config_path,
-        'timestamp': datetime.now().isoformat(),
-        'metric': metric,
-        'results': results,
-    }
-    if results:
-        best = min(results, key=lambda r: r.get(metric, float('inf')))
-        output['best_run_id'] = best['run_id']
-        output[f'best_{metric}'] = best[metric]
-    with open(results_path, 'w') as f:
-        json.dump(output, f, indent=2)
-
-
 def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
                     config_path: str = '',
                     results_path: str = 'results/grid_search_tabpfn_regression_results.json',
@@ -446,7 +376,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
     seed = cfg.get('seed', 0)
 
     # Load previously completed results
-    existing_results = _load_existing_results(results_path)
+    existing_results = load_existing_results(results_path)
     existing_by_key: dict[str, dict[str, Any]] = {}
     for r in existing_results:
         key = _combo_key({
@@ -567,7 +497,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         error_rate = (test_metrics['FN'] + test_metrics['FP']) / max(test_P, 1)
 
         # Build representative context for inference checkpoint
-        ctx_X, ctx_y = _build_representative_context(
+        ctx_X, ctx_y = build_representative_context(
             X_tr, y_tr, batch_size=bs, seed=seed)
 
         # Save full checkpoint
@@ -609,7 +539,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         }
         results.append(result)
 
-        _save_incremental(results, cfg, config_path, results_path)
+        save_incremental(results, cfg, config_path, results_path)
 
         print(f'  Train: TP={train_metrics["TP"]:,} FP={train_metrics["FP"]:,} '
               f'FN={train_metrics["FN"]:,} TN={train_metrics["TN"]:,}')
