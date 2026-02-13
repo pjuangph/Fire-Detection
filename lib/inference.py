@@ -100,7 +100,11 @@ def _find_checkpoint(
     if model_path and os.path.isfile(model_path):
         return model_path
 
-    if model_type == 'tabpfn':
+    if model_type == 'tabpfn_regression':
+        candidates = [
+            'checkpoint/fire_detector_tabpfn_regression_best.pt',
+        ]
+    elif model_type == 'tabpfn':
         candidates = [
             'checkpoint/fire_detector_tabpfn_best.pt',
         ]
@@ -122,17 +126,19 @@ def load_fire_model(
     model_path: str | None = None,
     threshold: float | None = None,
     model_type: str = 'firemlp',
-) -> '_MLFireDetector | _TabPFNFireDetector | None':
+) -> '_MLFireDetector | _TabPFNFireDetector | _TabPFNRegressionDetector | None':
     """Load trained ML fire detector for realtime use. Returns None if not found.
 
     Args:
         model_path: Explicit checkpoint path, or None for auto-discovery.
         threshold: Override classification threshold (default: use checkpoint value).
-        model_type: 'firemlp' or 'tabpfn'.
+        model_type: 'firemlp', 'tabpfn', or 'tabpfn_regression'.
     """
     path = _find_checkpoint(model_path, model_type=model_type)
     if path is None:
         return None
+    if model_type == 'tabpfn_regression':
+        return _TabPFNRegressionDetector(path, threshold=threshold)
     if model_type == 'tabpfn':
         return _TabPFNFireDetector(path, threshold=threshold)
     return _MLFireDetector(path, threshold=threshold)
@@ -289,6 +295,82 @@ class _TabPFNFireDetector:
         X = np.where(np.isfinite(features), features, 0.0).astype(np.float32)
         X = self.scaler.transform(X)
         probs = self.model.predict_proba(X)[:, 1]
+
+        prob_grid[valid_mask] = probs
+        return prob_grid
+
+
+class _TabPFNRegressionDetector:
+    """Wrapper for grid-state-based TabPFN regression inference.
+
+    Loads a from-scratch trained TabPFNRegressor checkpoint, reconstructs
+    the model, and uses predict() (continuous output clipped to [0,1]).
+    """
+
+    def __init__(self, model_path: str, threshold: float | None = None) -> None:
+        from lib.fire import compute_aggregate_features
+        self._compute_features = compute_aggregate_features
+
+        self._load_from_scratch(model_path, threshold)
+
+    def _load_from_scratch(self, model_path: str, threshold: float | None) -> None:
+        """Load from-scratch trained TabPFN regressor from torch checkpoint."""
+        from tabpfn import TabPFNRegressor
+        from tabpfn.finetuning.train_util import clone_model_for_evaluation
+
+        ckpt = torch.load(model_path, weights_only=False, map_location='cpu')
+
+        self.scaler = ckpt['scaler']
+        self.threshold = threshold if threshold is not None else ckpt.get('threshold', 0.5)
+
+        # Reconstruct regressor with random weights, then load trained weights
+        init_args = ckpt['regressor_init']
+        regressor = TabPFNRegressor(
+            **init_args,
+            fit_mode="batched",
+            differentiable_input=False,
+        )
+        regressor._initialize_model_variables()
+        regressor.models_[0].load_state_dict(ckpt['model_state_dict'])
+
+        # Clone for clean evaluation and fit on saved context
+        eval_init = {k: v for k, v in init_args.items() if k != 'model_path'}
+        eval_reg = clone_model_for_evaluation(
+            regressor, eval_init, TabPFNRegressor)
+        eval_reg.fit(ckpt['context_X'], ckpt['context_y'])
+
+        self.model = eval_reg  # has predict()
+
+    def predict_from_gs(self, gs: dict[str, Any]) -> np.ndarray:
+        """Compute aggregate features from gs accumulators, run TabPFN regressor.
+
+        Returns:
+            bool fire mask (nrows x ncols).
+        """
+        features, valid_mask = self._compute_features(gs)
+        fire_mask = np.zeros((gs['nrows'], gs['ncols']), dtype=bool)
+
+        if features.shape[0] == 0:
+            return fire_mask
+
+        X = np.where(np.isfinite(features), features, 0.0).astype(np.float32)
+        X = self.scaler.transform(X)
+        probs = np.clip(self.model.predict(X), 0.0, 1.0)
+
+        fire_mask[valid_mask] = probs >= self.threshold
+        return fire_mask
+
+    def predict_proba_from_gs(self, gs: dict[str, Any]) -> np.ndarray:
+        """Return P(fire) grid (nrows x ncols), NaN where no data."""
+        features, valid_mask = self._compute_features(gs)
+        prob_grid = np.full((gs['nrows'], gs['ncols']), np.nan, dtype=np.float32)
+
+        if features.shape[0] == 0:
+            return prob_grid
+
+        X = np.where(np.isfinite(features), features, 0.0).astype(np.float32)
+        X = self.scaler.transform(X)
+        probs = np.clip(self.model.predict(X), 0.0, 1.0)
 
         prob_grid[valid_mask] = probs
         return prob_grid

@@ -1,33 +1,30 @@
-"""train_tabpfn.py - From-scratch TabPFN training for fire detection.
+"""train_tabpfn_regression.py - From-scratch TabPFN regression training.
 
 Initializes TabPFN with random weights (model_path="random:<seed>") so no
 pretrained checkpoint download is needed. Trains the transformer with gradient
-descent using cross-entropy loss on binary fire/no-fire classification.
+descent using bar distribution regression loss (CRPS + optional MSE auxiliary)
+on binary fire/no-fire targets treated as continuous regression.
 
 Iterates over combinations of learning_rate, batch_size, n_estimators,
-weight_decay, and grad_clip_norm. Results are saved to JSON. The best model
-checkpoint includes a representative training context for inference.
+weight_decay, grad_clip_norm, and regression loss weights. Results are saved
+to JSON. The best model checkpoint includes a representative training context
+for inference.
 
 Usage:
-    python train_tabpfn.py --config configs/grid_search_tabpfn.yaml
+    python train_tabpfn_regression.py --config configs/grid_search_tabpfn_regression.yaml
 """
 
 from __future__ import annotations
 
 import argparse
 import itertools
-import json
 import os
-import platform
 import shutil
-from datetime import datetime
-from functools import partial
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 import torch
-import torch.nn.functional as F
 import yaml
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -36,17 +33,19 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from tabpfn import TabPFNClassifier
+from tabpfn import TabPFNRegressor
 from tabpfn.finetuning.train_util import clone_model_for_evaluation
+from tabpfn.finetuning.finetuned_regressor import _compute_regression_loss
 from tabpfn.finetuning.data_util import (
     get_preprocessed_dataset_chunks, meta_dataset_collator,
 )
 
 from lib import group_files_by_flight
 from lib.inference import FEATURE_NAMES
-from lib.evaluation import evaluate
+from lib.evaluation import auto_device
 from lib.training import (
-    load_all_data, extract_train_test,
+    load_all_data, load_existing_results, save_incremental,
+    build_representative_context, make_splitter,
     FlightFeatures,
 )
 
@@ -55,39 +54,7 @@ NDArrayFloat = npt.NDArray[np.floating[Any]]
 TrainResult = dict[str, Any]
 
 
-# ── Device Detection ──────────────────────────────────────────
-
-
-def _auto_device() -> str:
-    """Return best available device string for TabPFN."""
-    if platform.system() == "Darwin":
-        mps_ok = (hasattr(torch.backends, "mps")
-                  and torch.backends.mps.is_available())
-        return "mps" if mps_ok else "cpu"
-    return "cuda:0" if torch.cuda.is_available() else "cpu"
-
-
-# ── TabPFN Training ──────────────────────────────────────────
-
-
-def _build_representative_context(
-    X: NDArrayFloat, y: NDArrayFloat, batch_size: int, seed: int,
-) -> tuple[NDArrayFloat, NDArrayFloat]:
-    """Build a balanced (stratified) context subset for inference checkpoint."""
-    rng = np.random.default_rng(seed)
-    fire_idx = np.where(y == 1)[0]
-    nofire_idx = np.where(y == 0)[0]
-
-    half = batch_size // 2
-    n_fire = min(half, len(fire_idx))
-    n_nofire = min(batch_size - n_fire, len(nofire_idx))
-
-    fire_sel = rng.choice(fire_idx, n_fire, replace=len(fire_idx) < n_fire)
-    nofire_sel = rng.choice(nofire_idx, n_nofire, replace=len(nofire_idx) < n_nofire)
-
-    idx = np.concatenate([fire_sel, nofire_sel])
-    rng.shuffle(idx)
-    return X[idx].copy(), y[idx].copy()
+# ── TabPFN Regression Training ───────────────────────────────
 
 
 def train_tabpfn_model(
@@ -100,6 +67,8 @@ def train_tabpfn_model(
     batch_size: int = 256,
     n_estimators: int = 1,
     grad_clip_norm: float = 1.0,
+    crps_loss_weight: float = 1.0,
+    mse_loss_weight: float = 1.0,
     test_size: float = 0.2,
     seed: int = 0,
     quiet: bool = False,
@@ -107,20 +76,23 @@ def train_tabpfn_model(
     save_path: str | None = None,
     save_every: int = 5,
 ) -> TrainResult:
-    """Train TabPFN classifier from random weights with gradient descent.
+    """Train TabPFN regressor from random weights with gradient descent.
 
     Splits X/y internally into train/test, then trains the transformer
-    on shuffled chunks of batch_size rows per epoch.
+    on shuffled chunks of batch_size rows per epoch using bar distribution
+    regression loss.
 
     Args:
         X: Scaled feature array (N, 12) — full dataset (train+test).
-        y: Binary labels (N,).
+        y: Binary labels (N,) treated as continuous regression targets.
         n_epochs: Number of training epochs.
         lr: Learning rate for AdamW.
         weight_decay: AdamW weight decay.
         batch_size: Rows per chunk fed to TabPFN attention (power of 2).
         n_estimators: Number of internal ensemble models.
         grad_clip_norm: Max gradient norm for clipping.
+        crps_loss_weight: Weight for CRPS (continuous ranked probability score) loss.
+        mse_loss_weight: Weight for auxiliary MSE loss on mean prediction.
         test_size: Fraction held out for internal test split.
         seed: Random seed.
         quiet: Suppress progress output.
@@ -129,14 +101,14 @@ def train_tabpfn_model(
         save_every: Save every N epochs.
 
     Returns:
-        Dict with model, classifier, loss_history, epochs_completed,
-        optimizer_state, classifier_init, X_train, y_train, X_test, y_test.
+        Dict with model, regressor, loss_history, epochs_completed,
+        optimizer_state, regressor_init, X_train, y_train, X_test, y_test.
     """
-    device_str = _auto_device()
+    device_str = auto_device()
     if not quiet:
         print(f'  Device: {device_str}')
 
-    # Internal train/test split (stratified)
+    # Internal train/test split (no stratification for regression)
     n_fire = int(y.sum())
     stratify = y if n_fire >= 2 and (len(y) - n_fire) >= 2 else None
     X_train, X_test, y_train, y_test = train_test_split(
@@ -146,7 +118,7 @@ def train_tabpfn_model(
         print(f'  Split: {len(X_train)} train, {len(X_test)} test '
               f'({int(y_train.sum())} fire / {int((y_train == 0).sum())} no-fire)')
 
-    classifier_init = {
+    regressor_init = {
         "device": device_str,
         "random_state": seed,
         "n_estimators": n_estimators,
@@ -154,17 +126,17 @@ def train_tabpfn_model(
         "inference_precision": torch.float32,
         "model_path": f"random:{seed}",
     }
-    classifier = TabPFNClassifier(
-        **classifier_init,
+    regressor = TabPFNRegressor(
+        **regressor_init,
         fit_mode="batched",
         differentiable_input=False,
     )
 
-    classifier._initialize_model_variables()
-    if len(classifier.models_) != 1:
+    regressor._initialize_model_variables()
+    if len(regressor.models_) != 1:
         raise ValueError(
-            f"Expected 1 internal model, got {len(classifier.models_)}.")
-    model = classifier.models_[0]
+            f"Expected 1 internal model, got {len(regressor.models_)}.")
+    model = regressor.models_[0]
     model.train()
 
     optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -183,11 +155,11 @@ def train_tabpfn_model(
 
     early_result = {
         'model': model,
-        'classifier': classifier,
+        'regressor': regressor,
         'loss_history': np.zeros((0, 1)),
         'epochs_completed': n_epochs,
         'optimizer_state': optimizer.state_dict(),
-        'classifier_init': classifier_init,
+        'regressor_init': regressor_init,
         'X_train': X_train,
         'y_train': y_train,
         'X_test': X_test,
@@ -197,7 +169,7 @@ def train_tabpfn_model(
         return early_result
 
     rng = np.random.default_rng(seed)
-    splitter = partial(train_test_split, test_size=0.2, random_state=seed)
+    splitter = make_splitter(test_size=0.2, seed=seed)
 
     remaining = n_epochs - start_epoch
     loss_history = np.zeros((remaining, 1))
@@ -217,14 +189,14 @@ def train_tabpfn_model(
             X_contexts.append(X_train[idx])
             y_contexts.append(y_train[idx])
 
-        # Preprocess into TabPFN dataset format
+        # Preprocess into TabPFN dataset format (regression mode)
         training_datasets = get_preprocessed_dataset_chunks(
-            calling_instance=classifier,
+            calling_instance=regressor,
             X_raw=X_contexts,
             y_raw=y_contexts,
             split_fn=splitter,
             max_data_size=None,
-            model_type="classifier",
+            model_type="regressor",
             equal_split_size=True,
             seed=seed + epoch,
         )
@@ -241,26 +213,39 @@ def train_tabpfn_model(
         for batch in progress:
             optimizer.zero_grad(set_to_none=True)
 
+            # Set bar distribution for this batch (regression-specific)
+            regressor.raw_space_bardist_ = batch.raw_space_bardist
+            regressor.bardist_ = batch.znorm_space_bardist
+
             # Fit from preprocessed context
-            classifier.fit_from_preprocessed(
+            regressor.fit_from_preprocessed(
                 batch.X_context, batch.y_context,
                 batch.cat_indices, batch.configs,
             )
 
-            # Forward with raw logits: shape (Q, B=1, E, L)
-            logits_QBEL = classifier.forward(
-                batch.X_query, return_raw_logits=True,
-            )
+            # Forward: returns (averaged_logits, per_estim_logits, borders)
+            _, per_estim_logits, _ = regressor.forward(batch.X_query)
+
+            # per_estim_logits: list of [Q, B(=1), L] tensors
+            logits_QBEL = torch.stack(per_estim_logits, dim=2)
             Q, B, E, L = logits_QBEL.shape
 
-            # Reshape to (B*E, L, Q) for cross-entropy
-            logits_BLQ = logits_QBEL.permute(1, 2, 3, 0).reshape(B * E, L, Q)
+            # Reshape to (B*E, Q, L) for bar distribution loss
+            logits_BQL = logits_QBEL.permute(1, 2, 0, 3).reshape(B * E, Q, L)
 
             # Expand targets to (B*E, Q)
-            targets_BQ = batch.y_query.to(logits_BLQ.device)
-            targets_BQ = targets_BQ.expand(B * E, -1).long()
+            targets_BQ = batch.y_query.to(logits_BQL.device)
+            targets_BQ = targets_BQ.repeat(B * E, 1)
 
-            loss = F.cross_entropy(logits_BLQ, targets_BQ)
+            loss = _compute_regression_loss(
+                logits_BQL=logits_BQL,
+                targets_BQ=targets_BQ,
+                bardist_loss_fn=batch.znorm_space_bardist,
+                ce_loss_weight=0.0,
+                crps_loss_weight=crps_loss_weight,
+                mse_loss_weight=mse_loss_weight,
+                mae_loss_weight=0.0,
+            )
             loss.backward()
             clip_grad_norm_(model.parameters(), max_norm=grad_clip_norm)
             optimizer.step()
@@ -281,16 +266,16 @@ def train_tabpfn_model(
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'epoch': epoch,
-                'classifier_init': classifier_init,
+                'regressor_init': regressor_init,
             }, save_path)
 
     return {
         'model': model,
-        'classifier': classifier,
+        'regressor': regressor,
         'loss_history': loss_history,
         'epochs_completed': n_epochs,
         'optimizer_state': optimizer.state_dict(),
-        'classifier_init': classifier_init,
+        'regressor_init': regressor_init,
         'X_train': X_train,
         'y_train': y_train,
         'X_test': X_test,
@@ -298,30 +283,46 @@ def train_tabpfn_model(
     }
 
 
-def _evaluate_tabpfn(
-    classifier: TabPFNClassifier,
-    classifier_init: dict[str, Any],
+def _evaluate_tabpfn_regressor(
+    regressor: TabPFNRegressor,
+    regressor_init: dict[str, Any],
     X_train: NDArrayFloat, y_train: NDArrayFloat,
     X_eval: NDArrayFloat, y_eval: NDArrayFloat,
-    batch_size: int, seed: int,
+    batch_size: int, seed: int, threshold: float = 0.5,
 ) -> tuple[dict[str, Any], NDArrayFloat]:
-    """Evaluate a trained TabPFN classifier on a dataset.
+    """Evaluate a trained TabPFN regressor on a dataset.
 
     Clones the model for clean eval, fits on a representative context,
-    then uses the existing evaluate() function.
+    predicts continuous values, clips to [0,1], and thresholds for
+    binary fire detection metrics.
     """
-    eval_init = {k: v for k, v in classifier_init.items() if k != 'model_path'}
-    eval_clf = clone_model_for_evaluation(
-        classifier, eval_init, TabPFNClassifier)
+    eval_init = {k: v for k, v in regressor_init.items() if k != 'model_path'}
+    eval_reg = clone_model_for_evaluation(
+        regressor, eval_init, TabPFNRegressor)
 
     # Fit on a representative context sample
     rng = np.random.default_rng(seed)
     n = min(batch_size, len(X_train))
     replace = len(X_train) < batch_size
     idx = rng.choice(len(X_train), size=n, replace=replace)
-    eval_clf.fit(X_train[idx], y_train[idx])
+    eval_reg.fit(X_train[idx], y_train[idx])
 
-    return evaluate(eval_clf, X_eval, y_eval)
+    # Regression output -> continuous values -> clip to [0,1] -> threshold
+    preds_raw = eval_reg.predict(X_eval)
+    probs = np.clip(preds_raw, 0.0, 1.0).astype(np.float32)
+    preds = (probs >= threshold).astype(np.float32)
+
+    TP = int(np.sum((preds == 1) & (y_eval == 1)))
+    FP = int(np.sum((preds == 1) & (y_eval == 0)))
+    FN = int(np.sum((preds == 0) & (y_eval == 1)))
+    TN = int(np.sum((preds == 0) & (y_eval == 0)))
+    precision = TP / max(TP + FP, 1)
+    recall = TP / max(TP + FN, 1)
+
+    return {
+        'TP': TP, 'FP': FP, 'FN': FN, 'TN': TN,
+        'precision': precision, 'recall': recall,
+    }, probs
 
 
 # ── Grid Search ──────────────────────────────────────────────
@@ -331,12 +332,14 @@ def build_combos(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     """Generate all hyperparameter combinations from YAML config."""
     space = cfg['search_space']
     combos: list[dict[str, Any]] = []
-    for lr, bs, n_est, wd, gc in itertools.product(
+    for lr, bs, n_est, wd, gc, crps_w, mse_w in itertools.product(
         space['learning_rate'],
         space['batch_size'],
         space['n_estimators'],
         space['weight_decay'],
         space['grad_clip_norm'],
+        space.get('crps_loss_weight', [1.0]),
+        space.get('mse_loss_weight', [1.0]),
     ):
         combos.append({
             'learning_rate': lr,
@@ -344,6 +347,8 @@ def build_combos(cfg: dict[str, Any]) -> list[dict[str, Any]]:
             'n_estimators': n_est,
             'weight_decay': wd,
             'grad_clip_norm': gc,
+            'crps_loss_weight': crps_w,
+            'mse_loss_weight': mse_w,
         })
     return combos
 
@@ -352,42 +357,15 @@ def _combo_key(combo: dict[str, Any]) -> str:
     """Build a unique string key for a hyperparameter combo."""
     return (f"{combo['learning_rate']}|{combo['batch_size']}"
             f"|{combo['n_estimators']}|{combo['weight_decay']}"
-            f"|{combo['grad_clip_norm']}")
-
-
-def _load_existing_results(results_path: str) -> list[dict[str, Any]]:
-    """Load previously completed results from JSON (for restart)."""
-    if not os.path.isfile(results_path):
-        return []
-    with open(results_path) as f:
-        data = json.load(f)
-    return data.get('results', [])
-
-
-def _save_incremental(results: list[dict[str, Any]], cfg: dict[str, Any],
-                      config_path: str, results_path: str) -> None:
-    """Save results to JSON after each run (crash-safe)."""
-    os.makedirs(os.path.dirname(results_path) or '.', exist_ok=True)
-    metric = cfg.get('metric', 'error_rate')
-    output = {
-        'config': config_path,
-        'timestamp': datetime.now().isoformat(),
-        'metric': metric,
-        'results': results,
-    }
-    if results:
-        best = min(results, key=lambda r: r.get(metric, float('inf')))
-        output['best_run_id'] = best['run_id']
-        output[f'best_{metric}'] = best[metric]
-    with open(results_path, 'w') as f:
-        json.dump(output, f, indent=2)
+            f"|{combo['grad_clip_norm']}"
+            f"|{combo['crps_loss_weight']}|{combo['mse_loss_weight']}")
 
 
 def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
                     config_path: str = '',
-                    results_path: str = 'results/grid_search_tabpfn_results.json',
+                    results_path: str = 'results/grid_search_tabpfn_regression_results.json',
                     ) -> list[dict[str, Any]]:
-    """Run all TabPFN grid search combinations and return results.
+    """Run all TabPFN regression grid search combinations and return results.
 
     Supports restart: loads existing results, skips completed combos,
     resumes under-trained ones from checkpoint.
@@ -398,7 +376,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
     seed = cfg.get('seed', 0)
 
     # Load previously completed results
-    existing_results = _load_existing_results(results_path)
+    existing_results = load_existing_results(results_path)
     existing_by_key: dict[str, dict[str, Any]] = {}
     for r in existing_results:
         key = _combo_key({
@@ -407,6 +385,8 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             'n_estimators': r['n_estimators'],
             'weight_decay': r['weight_decay'],
             'grad_clip_norm': r['grad_clip_norm'],
+            'crps_loss_weight': r['crps_loss_weight'],
+            'mse_loss_weight': r['mse_loss_weight'],
         })
         existing_by_key[key] = r
 
@@ -419,11 +399,24 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
               f'{n_resume} under-trained (will resume), '
               f'{len(combos) - len(existing_by_key)} new')
 
-    # Fit scaler once on all data
-    all_X = np.concatenate([ff['X'] for ff in flight_features.values()])
-    all_X = np.where(np.isfinite(all_X), all_X, 0.0).astype(np.float32)
+    # Build full dataset — ground truth flight (pre-burn) forced to y=0
+    gt_flight = '24-801-03'
+    X_parts, y_parts = [], []
+    for fnum, ff in flight_features.items():
+        X_parts.append(ff['X'])
+        if fnum == gt_flight:
+            y_parts.append(np.zeros(len(ff['X']), dtype=np.float32))
+        else:
+            y_parts.append(ff['y'])
+    X_all = np.concatenate(X_parts)
+    y_all = np.concatenate(y_parts)
+
+    # Fit scaler once on all features, then normalize
+    X_clean = np.where(np.isfinite(X_all), X_all, 0.0).astype(np.float32)
     scaler = StandardScaler()
-    scaler.fit(all_X)
+    scaler.fit(X_clean)
+    X_norm = scaler.transform(X_clean).astype(np.float32)
+    y_norm = y_all.astype(np.float32)
 
     os.makedirs('checkpoint', exist_ok=True)
     results: list[dict[str, Any]] = [
@@ -432,20 +425,6 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
     ]
     n_combos = len(combos)
 
-    # Build full dataset (train_tabpfn_model splits internally)
-    X_train, y_train, _w_train, X_test, y_test, _w_test = extract_train_test(
-        flight_features,
-        train_flights=['24-801-04', '24-801-05'],
-        test_flights=['24-801-06'],
-        ground_truth_flight='24-801-03',
-        gt_test_ratio=0.2,
-    )
-    X_all = np.concatenate([X_train, X_test])
-    y_all = np.concatenate([y_train, y_test])
-    X_all_clean = np.where(np.isfinite(X_all), X_all, 0.0).astype(np.float32)
-    X_norm = scaler.transform(X_all_clean).astype(np.float32)
-    y_norm = y_all.astype(np.float32)
-
     for i, combo in enumerate(combos):
         run_id = i + 1
         lr_val = combo['learning_rate']
@@ -453,9 +432,11 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         n_est = combo['n_estimators']
         wd = combo['weight_decay']
         gc = combo['grad_clip_norm']
+        crps_w = combo['crps_loss_weight']
+        mse_w = combo['mse_loss_weight']
         key = _combo_key(combo)
 
-        ckpt_path = f'checkpoint/fire_detector_tabpfn_run_{run_id:02d}.pt'
+        ckpt_path = f'checkpoint/fire_detector_tabpfn_reg_run_{run_id:02d}.pt'
 
         # Skip fully-trained runs
         existing = existing_by_key.get(key)
@@ -477,7 +458,8 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
 
         print(f'\n{"=" * 60}')
         print(f'Run {run_id}/{n_combos}: lr={lr_val}, bs={bs}, '
-              f'n_est={n_est}, wd={wd}, gc={gc}')
+              f'n_est={n_est}, wd={wd}, gc={gc}, '
+              f'crps={crps_w}, mse={mse_w}')
         print('=' * 60)
         if resume_ckpt:
             print(f'  Resuming from checkpoint')
@@ -486,13 +468,15 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             X_norm, y_norm,
             n_epochs=epochs, lr=lr_val, weight_decay=wd,
             batch_size=bs, n_estimators=n_est,
-            grad_clip_norm=gc, seed=seed,
+            grad_clip_norm=gc,
+            crps_loss_weight=crps_w, mse_loss_weight=mse_w,
+            seed=seed,
             quiet=False, resume_from=resume_ckpt,
             save_path=ckpt_path, save_every=save_every,
         )
 
-        classifier = train_result['classifier']
-        classifier_init = train_result['classifier_init']
+        regressor = train_result['regressor']
+        regressor_init = train_result['regressor_init']
         epochs_completed = train_result['epochs_completed']
         X_tr = train_result['X_train']
         y_tr = train_result['y_train']
@@ -500,12 +484,12 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         y_te = train_result['y_test']
 
         # Evaluate on internal train/test splits
-        train_metrics, _ = _evaluate_tabpfn(
-            classifier, classifier_init,
+        train_metrics, _ = _evaluate_tabpfn_regressor(
+            regressor, regressor_init,
             X_tr, y_tr, X_tr, y_tr,
             batch_size=bs, seed=seed)
-        test_metrics, _ = _evaluate_tabpfn(
-            classifier, classifier_init,
+        test_metrics, _ = _evaluate_tabpfn_regressor(
+            regressor, regressor_init,
             X_tr, y_tr, X_te, y_te,
             batch_size=bs, seed=seed)
 
@@ -513,7 +497,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         error_rate = (test_metrics['FN'] + test_metrics['FP']) / max(test_P, 1)
 
         # Build representative context for inference checkpoint
-        ctx_X, ctx_y = _build_representative_context(
+        ctx_X, ctx_y = build_representative_context(
             X_tr, y_tr, batch_size=bs, seed=seed)
 
         # Save full checkpoint
@@ -521,7 +505,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             'model_state_dict': train_result['model'].state_dict(),
             'optimizer_state_dict': train_result['optimizer_state'],
             'epoch': epochs_completed,
-            'classifier_init': classifier_init,
+            'regressor_init': regressor_init,
             'context_X': ctx_X,
             'context_y': ctx_y,
             'scaler': scaler,
@@ -542,6 +526,8 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             'n_estimators': n_est,
             'weight_decay': wd,
             'grad_clip_norm': gc,
+            'crps_loss_weight': crps_w,
+            'mse_loss_weight': mse_w,
             'epochs_completed': epochs_completed,
             'train': {k: (float(v) if isinstance(v, (int, float, np.integer, np.floating)) else v)
                       for k, v in train_metrics.items()},
@@ -553,7 +539,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         }
         results.append(result)
 
-        _save_incremental(results, cfg, config_path, results_path)
+        save_incremental(results, cfg, config_path, results_path)
 
         print(f'  Train: TP={train_metrics["TP"]:,} FP={train_metrics["FP"]:,} '
               f'FN={train_metrics["FN"]:,} TN={train_metrics["TN"]:,}')
@@ -570,12 +556,12 @@ def print_results_table(results: list[dict[str, Any]], metric: str) -> None:
     """Print sorted summary table of grid search results."""
     sorted_results = sorted(results, key=lambda r: r.get(metric, float('inf')))
 
-    print(f'\n{"=" * 110}')
-    print(f'TabPFN Grid Search Results (sorted by {metric}, best first)')
-    print('=' * 110)
+    print(f'\n{"=" * 130}')
+    print(f'TabPFN Regression Grid Search Results (sorted by {metric}, best first)')
+    print('=' * 130)
 
     header = (f'  {"Run":>3s}  {"LR":>8s}  {"BS":>4s}  {"Est":>3s}  '
-              f'{"WD":>6s}  {"GC":>4s}  '
+              f'{"WD":>6s}  {"GC":>4s}  {"CRPS":>4s}  {"MSE":>4s}  '
               f'{"TP":>6s}  {"FP":>5s}  {"FN":>5s}  '
               f'{"Prec":>6s}  {"Rec":>6s}  {"ErrRate":>7s}')
     print(header)
@@ -586,6 +572,7 @@ def print_results_table(results: list[dict[str, Any]], metric: str) -> None:
         print(f'  {r["run_id"]:>3d}  {r["learning_rate"]:>8.1e}  '
               f'{r["batch_size"]:>4d}  {r["n_estimators"]:>3d}  '
               f'{r["weight_decay"]:>6.3f}  {r["grad_clip_norm"]:>4.1f}  '
+              f'{r["crps_loss_weight"]:>4.1f}  {r["mse_loss_weight"]:>4.1f}  '
               f'{t["TP"]:>6.0f}  {t["FP"]:>5.0f}  {t["FN"]:>5.0f}  '
               f'{t["precision"]:>6.4f}  {t["recall"]:>6.4f}  '
               f'{r["error_rate"]:>7.4f}')
@@ -598,7 +585,7 @@ def write_best_model_config(best: dict[str, Any], checkpoint_path: str,
     t = best['test']
     config = {
         'detector': 'ml',
-        'model_type': 'tabpfn',
+        'model_type': 'tabpfn_regression',
         'checkpoint': checkpoint_path,
         'threshold': 0.5,
         'training': {
@@ -607,6 +594,8 @@ def write_best_model_config(best: dict[str, Any], checkpoint_path: str,
             'n_estimators': best['n_estimators'],
             'weight_decay': best['weight_decay'],
             'grad_clip_norm': best['grad_clip_norm'],
+            'crps_loss_weight': best['crps_loss_weight'],
+            'mse_loss_weight': best['mse_loss_weight'],
             'epochs': best['epochs_completed'],
         },
         'metrics': {
@@ -629,16 +618,16 @@ def write_best_model_config(best: dict[str, Any], checkpoint_path: str,
 
 
 def main() -> None:
-    """Run TabPFN from-scratch grid search."""
+    """Run TabPFN regression grid search."""
     parser = argparse.ArgumentParser(
-        description='Train TabPFN fire detector from scratch via grid search')
+        description='Train TabPFN regressor for fire detection via grid search')
     parser.add_argument(
-        '--config', type=str, default='configs/grid_search_tabpfn.yaml',
+        '--config', type=str, default='configs/grid_search_tabpfn_regression.yaml',
         help='Path to YAML grid search config')
     args = parser.parse_args()
 
     print('=' * 60)
-    print('ML Fire Detection \u2014 TabPFN From-Scratch Training')
+    print('ML Fire Detection \u2014 TabPFN Regression Training')
     print('=' * 60)
     print('\n--- Loading flight data ---')
     flights = group_files_by_flight()
@@ -653,7 +642,7 @@ def main() -> None:
     print(f'\nConfig: {config_path}')
     print(f'Runs: {len(combos)} | Epochs: {cfg.get("epochs", 10)} | Metric: {metric}')
 
-    results_path = 'results/grid_search_tabpfn_results.json'
+    results_path = 'results/grid_search_tabpfn_regression_results.json'
     results = run_grid_search(cfg, flight_features,
                               config_path=config_path,
                               results_path=results_path)
@@ -662,7 +651,7 @@ def main() -> None:
 
     best = min(results, key=lambda r: r.get(metric, float('inf')))
     best_ckpt = best['checkpoint']
-    best_path = 'checkpoint/fire_detector_tabpfn_best.pt'
+    best_path = 'checkpoint/fire_detector_tabpfn_regression_best.pt'
     shutil.copy2(best_ckpt, best_path)
 
     model_config_path = 'configs/best_model.yaml'
@@ -675,6 +664,8 @@ def main() -> None:
     print(f'  n_estimators:    {best["n_estimators"]}')
     print(f'  Weight decay:    {best["weight_decay"]}')
     print(f'  Grad clip:       {best["grad_clip_norm"]}')
+    print(f'  CRPS weight:     {best["crps_loss_weight"]}')
+    print(f'  MSE weight:      {best["mse_loss_weight"]}')
     print(f'  Error rate:      {best["error_rate"]:.4f}')
     print(f'  Precision:       {best["test"]["precision"]:.4f}')
     print(f'  Recall:          {best["test"]["recall"]:.4f}')

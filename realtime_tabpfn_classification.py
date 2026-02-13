@@ -1,9 +1,10 @@
-"""realtime_tabpfn.py - Real-time fire detection simulation with TabPFN model.
+"""realtime_tabpfn_classification.py - Real-time fire detection with TabPFN classifier.
 
-Thin wrapper around lib.realtime that loads a TabPFN model from a YAML config.
+Thin wrapper around lib.realtime that loads a TabPFN classification model from
+a YAML config.
 
 Usage:
-    python realtime_tabpfn.py --config configs/best_model.yaml
+    python realtime_tabpfn_classification.py --config configs/best_model.yaml
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from lib.realtime import simulate_flight
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description='Real-time fire detection simulation (TabPFN)')
+        description='Real-time fire detection simulation (TabPFN classification)')
     parser.add_argument(
         '--config', type=str, required=True,
         help='Path to model config YAML (e.g. configs/best_model.yaml)')

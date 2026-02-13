@@ -1,21 +1,21 @@
-# Grid search configuration for from-scratch TabPFN fire detection training.
+# Grid search configuration for TabPFN classification fire detection training.
 #
 # Usage:
-#   python train_tabpfn.py --config configs/grid_search_tabpfn.yaml
+#   python train_tabpfn_classification.py --config configs/grid_search_tabpfn_classification.yaml
 #
 # TabPFN is initialized with random weights (model_path="random:<seed>")
-# and trained with gradient descent. No pretrained download needed.
+# and trained with gradient descent using cross-entropy loss.
 #
-# Grid size: 2 x 3 x 2 x 2 x 2 = 48 total runs.
+# Grid size: 2 x 1 x 2 x 2 x 2 = 16 total runs.
 
-epochs: 100
+epochs: 20
 metric: error_rate          # minimize (FN+FP)/P on test set
 seed: 0
 save_every: 5               # save checkpoint every N epochs for crash recovery
 
 search_space:
   learning_rate: [3.0e-4, 1.0e-4]
-  batch_size: [128, 256, 512]
+  batch_size: [4096]
   n_estimators: [1, 2]
   weight_decay: [0.01, 0.001]
   grad_clip_norm: [0.5, 1.0]

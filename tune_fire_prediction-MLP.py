@@ -13,10 +13,8 @@ from __future__ import annotations
 
 import argparse
 import itertools
-import json
 import os
 import shutil
-from datetime import datetime
 from typing import Any
 
 import numpy as np
@@ -29,6 +27,7 @@ from lib.inference import FEATURE_NAMES
 from lib.evaluation import evaluate
 from lib.training import (
     load_all_data, extract_train_test, oversample_minority, train_model,
+    load_existing_results, save_incremental,
     FlightFeatures,
 )
 
@@ -72,34 +71,6 @@ def _combo_key(combo: dict[str, Any]) -> str:
             f"|{wc['gt']}/{wc['fire']}/{wc['other']}")
 
 
-def _load_existing_results(results_path: str) -> list[dict[str, Any]]:
-    """Load previously completed results from JSON (for restart)."""
-    if not os.path.isfile(results_path):
-        return []
-    with open(results_path) as f:
-        data = json.load(f)
-    return data.get('results', [])
-
-
-def _save_incremental(results: list[dict[str, Any]], cfg: dict[str, Any],
-                      config_path: str, results_path: str) -> None:
-    """Save results to JSON after each run (crash-safe)."""
-    os.makedirs(os.path.dirname(results_path) or '.', exist_ok=True)
-    metric = cfg.get('metric', 'error_rate')
-    output = {
-        'config': config_path,
-        'timestamp': datetime.now().isoformat(),
-        'metric': metric,
-        'results': results,
-    }
-    if results:
-        best = min(results, key=lambda r: r.get(metric, float('inf')))
-        output['best_run_id'] = best['run_id']
-        output[f'best_{metric}'] = best[metric]
-    with open(results_path, 'w') as f:
-        json.dump(output, f, indent=2)
-
-
 def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
                     config_path: str = '',
                     results_path: str = 'results/grid_search_results.json',
@@ -115,7 +86,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
     save_every = cfg.get('save_every', 25)
 
     # Load previously completed results (restart support)
-    existing_results = _load_existing_results(results_path)
+    existing_results = load_existing_results(results_path)
     # Index existing results by combo key for fast lookup
     existing_by_key: dict[str, dict[str, Any]] = {}
     for r in existing_results:
@@ -285,7 +256,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         results.append(result)
 
         # Save after every run (crash-safe)
-        _save_incremental(results, cfg, config_path, results_path)
+        save_incremental(results, cfg, config_path, results_path)
 
         # Print result summary
         print(f'  Train: TP={train_metrics["TP"]:,} FP={train_metrics["FP"]:,} '
