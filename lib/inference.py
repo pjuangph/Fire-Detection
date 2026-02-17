@@ -110,6 +110,7 @@ def _find_checkpoint(
         ]
     else:
         candidates = [
+            'checkpoint/fire_detector_mlp_best.pt',
             'checkpoint/fire_detector_best.pt',
             'checkpoint/fire_detector_bce.pt',
             'checkpoint/fire_detector_error-rate.pt',

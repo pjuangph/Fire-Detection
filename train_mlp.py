@@ -2,7 +2,7 @@
 
 Iterates over combinations of loss function, architecture, learning rate,
 and importance weights. Results are saved to JSON. The best model is saved
-to checkpoint/fire_detector_best.pt for automatic discovery by inference.
+to checkpoint/fire_detector_mlp_best.pt for automatic discovery by inference.
 
 Usage:
     python train_mlp.py --config configs/grid_search_mlp.yaml
@@ -356,6 +356,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             'threshold': 0.5,
             'feature_names': FEATURE_NAMES,
             'loss_fn': loss,
+            'loss_history': loss_history[:, 0].tolist(),
         }, ckpt_path)
 
         final_loss = float(loss_history[-1, 0]) if len(loss_history) > 0 else 0.0
@@ -373,6 +374,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
                      for k, v in test_metrics.items()},
             'error_rate': float(error_rate),
             'final_loss': final_loss,
+            'loss_history': loss_history[:, 0].tolist(),
             'checkpoint': ckpt_path,
         }
         results.append(result)
@@ -417,7 +419,7 @@ def print_results_table(results: list[dict[str, Any]], metric: str) -> None:
 
 
 def write_best_model_config(best: dict[str, Any], checkpoint_path: str,
-                            config_path: str = 'configs/best_model.yaml',
+                            config_path: str = 'configs/best_model_mlp.yaml',
                             ) -> str:
     """Write YAML config for the best model (consumed by realtime scripts)."""
     wc = best['importance_weights']
@@ -516,10 +518,10 @@ def main() -> None:
 
     best = min(results, key=lambda r: r.get(metric, float('inf')))
     best_ckpt = best['checkpoint']
-    best_path = 'checkpoint/fire_detector_best.pt'
+    best_path = 'checkpoint/fire_detector_mlp_best.pt'
     shutil.copy2(best_ckpt, best_path)
 
-    model_config_path = 'configs/best_model.yaml'
+    model_config_path = 'configs/best_model_mlp.yaml'
     write_best_model_config(best, best_path, model_config_path)
 
     wc = best['importance_weights']
@@ -540,6 +542,10 @@ def main() -> None:
     print(f'    python compare_fire_detectors.py --model {best_path}')
     print(f'\n  To use in realtime:')
     print(f'    python realtime_mlp.py --config {model_config_path}')
+
+    from lib.plotting import plot_convergence_curves
+    plot_convergence_curves(results_path, out_path='plots/convergence_mlp.png',
+                            title='MLP Fire Detector — Training Convergence')
     print('Done.')
 
 
