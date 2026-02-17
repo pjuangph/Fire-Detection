@@ -1,6 +1,6 @@
 detector: ml
 model_type: firemlp
-checkpoint: checkpoint/fire_detector_best.pt
+checkpoint: checkpoint/fire_detector_mlp_best.pt
 threshold: 0.5
 training:
   loss: error-rate

@@ -43,6 +43,93 @@ def plot_training_loss(loss_history: NDArrayFloat) -> None:
     plt.close()
 
 
+def _run_label(r: dict[str, Any]) -> str:
+    """Build a descriptive label for one grid search run."""
+    parts = [f"Run {r['run_id']}"]
+    # MLP-specific
+    if 'layers' in r:
+        parts.append('x'.join(str(h) for h in r['layers']))
+    if 'loss' in r:
+        parts.append(r['loss'])
+    # TabPFN-specific
+    if 'n_estimators' in r:
+        parts.append(f"est={r['n_estimators']}")
+    if 'weight_decay' in r:
+        parts.append(f"wd={r['weight_decay']}")
+    if 'grad_clip_norm' in r:
+        parts.append(f"gc={r['grad_clip_norm']}")
+    # Regression loss weights
+    if 'crps_loss_weight' in r:
+        parts.append(f"crps={r['crps_loss_weight']}")
+    if 'mse_loss_weight' in r:
+        parts.append(f"mse={r['mse_loss_weight']}")
+    # Common
+    parts.append(f"lr={r.get('learning_rate', '?')}")
+    parts.append(f"err={r.get('error_rate', 0):.4f}")
+    return ' | '.join(parts)
+
+
+def plot_convergence_curves(
+    results_path: str,
+    out_path: str | None = None,
+    title: str = 'Training Convergence',
+    top_n: int | None = None,
+    metric: str = 'error_rate',
+) -> None:
+    """Plot loss convergence curves for all runs in a grid search results file.
+
+    Args:
+        results_path: Path to grid search results JSON.
+        out_path: Output image path (default: plots/convergence_curves.png).
+        title: Plot title (should identify the model type).
+        top_n: If set, only plot the top N runs sorted by metric.
+        metric: Metric to sort by when filtering top_n runs.
+    """
+    import json
+
+    if not os.path.isfile(results_path):
+        print(f'  No results file found at {results_path} -- skipping convergence plot.')
+        return
+
+    with open(results_path) as f:
+        data = json.load(f)
+
+    results = data.get('results', [])
+    results = [r for r in results if 'loss_history' in r and r['loss_history']]
+
+    if not results:
+        print(f'  No loss_history found in {results_path} -- skipping convergence plot.')
+        return
+
+    if top_n is not None:
+        results = sorted(results, key=lambda r: r.get(metric, float('inf')))[:top_n]
+
+    fig, ax = plt.subplots(figsize=(14, 8))
+    for r in results:
+        history = r['loss_history']
+        epochs = range(1, len(history) + 1)
+        ax.plot(epochs, history, linewidth=2.0, alpha=0.8, label=_run_label(r))
+
+    ax.set_xlabel('Epoch', fontsize=16)
+    ax.set_ylabel('Loss', fontsize=16)
+    ax.set_title(title, fontsize=18, fontweight='bold')
+    ax.set_yscale('log')
+    ax.tick_params(axis='both', labelsize=14)
+    ax.grid(True, alpha=0.3)
+    if len(results) <= 12:
+        ax.legend(fontsize=11, loc='best')
+    else:
+        ax.legend(fontsize=9, ncol=2, loc='best')
+
+    plt.tight_layout()
+    if out_path is None:
+        out_path = 'plots/convergence_curves.png'
+    os.makedirs(os.path.dirname(out_path) or '.', exist_ok=True)
+    plt.savefig(out_path, dpi=200, bbox_inches='tight')
+    print(f'  Saved {out_path}')
+    plt.close()
+
+
 def plot_probability_hist(
     probs_fire: NDArrayFloat,
     probs_nofire: NDArrayFloat,

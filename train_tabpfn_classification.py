@@ -466,6 +466,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             'n_estimators': n_est,
             'batch_size': bs,
             'seed': seed,
+            'loss_history': train_result['loss_history'][:, 0].tolist(),
         }, ckpt_path)
 
         loss_history = train_result['loss_history']
@@ -485,6 +486,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
                      for k, v in test_metrics.items()},
             'error_rate': float(error_rate),
             'final_loss': final_loss,
+            'loss_history': loss_history[:, 0].tolist(),
             'checkpoint': ckpt_path,
         }
         results.append(result)
@@ -528,7 +530,7 @@ def print_results_table(results: list[dict[str, Any]], metric: str) -> None:
 
 
 def write_best_model_config(best: dict[str, Any], checkpoint_path: str,
-                            config_path: str = 'configs/best_model.yaml',
+                            config_path: str = 'configs/best_model_tabpfn_classification.yaml',
                             ) -> str:
     """Write YAML config for the best model (consumed by realtime scripts)."""
     t = best['test']
@@ -601,7 +603,7 @@ def main() -> None:
     best_path = 'checkpoint/fire_detector_tabpfn_best.pt'
     shutil.copy2(best_ckpt, best_path)
 
-    model_config_path = 'configs/best_model.yaml'
+    model_config_path = 'configs/best_model_tabpfn_classification.yaml'
     write_best_model_config(best, best_path, model_config_path)
 
     print(f'\n{"=" * 60}')
@@ -619,6 +621,11 @@ def main() -> None:
     print(f'  Results:     {results_path}')
     print(f'\n  To use in realtime:')
     print(f'    python realtime_tabpfn.py --config {model_config_path}')
+
+    from lib.plotting import plot_convergence_curves
+    plot_convergence_curves(
+        results_path, out_path='plots/convergence_tabpfn_classification.png',
+        title='TabPFN Classifier — Training Convergence')
     print('Done.')
 
 
