@@ -221,10 +221,10 @@ def train_tabpfn_model(
             optimizer.zero_grad(set_to_none=True)
 
             # Move batch tensors to training device
-            batch.X_context = batch.X_context.to(device)
-            batch.y_context = batch.y_context.to(device)
-            batch.X_query = batch.X_query.to(device)
-            batch.y_query = batch.y_query.to(device)
+            batch.X_context = [t.to(device) if isinstance(t, torch.Tensor) else t for t in batch.X_context]
+            batch.y_context = [t.to(device) if isinstance(t, torch.Tensor) else t for t in batch.y_context]
+            batch.X_query = batch.X_query.to(device) if isinstance(batch.X_query, torch.Tensor) else [t.to(device) for t in batch.X_query]
+            batch.y_query = batch.y_query.to(device) if isinstance(batch.y_query, torch.Tensor) else [t.to(device) for t in batch.y_query]
 
             # Set bar distribution for this batch (regression-specific)
             regressor.raw_space_bardist_ = batch.raw_space_bardist
@@ -247,8 +247,8 @@ def train_tabpfn_model(
             logits_BQL = logits_QBEL.permute(1, 2, 0, 3).reshape(B * E, Q, L)
 
             # Expand targets to (B*E, Q)
-            targets_BQ = batch.y_query.to(logits_BQL.device)
-            targets_BQ = targets_BQ.repeat(B * E, 1)
+            yq = batch.y_query if isinstance(batch.y_query, torch.Tensor) else torch.cat(batch.y_query)
+            targets_BQ = yq.to(logits_BQL.device).repeat(B * E, 1)
 
             loss = _compute_regression_loss(
                 logits_BQL=logits_BQL,

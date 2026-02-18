@@ -214,10 +214,10 @@ def train_tabpfn_model(
             optimizer.zero_grad(set_to_none=True)
 
             # Move batch tensors to training device
-            batch.X_context = batch.X_context.to(device)
-            batch.y_context = batch.y_context.to(device)
-            batch.X_query = batch.X_query.to(device)
-            batch.y_query = batch.y_query.to(device)
+            batch.X_context = [t.to(device) if isinstance(t, torch.Tensor) else t for t in batch.X_context]
+            batch.y_context = [t.to(device) if isinstance(t, torch.Tensor) else t for t in batch.y_context]
+            batch.X_query = batch.X_query.to(device) if isinstance(batch.X_query, torch.Tensor) else [t.to(device) for t in batch.X_query]
+            batch.y_query = batch.y_query.to(device) if isinstance(batch.y_query, torch.Tensor) else [t.to(device) for t in batch.y_query]
 
             # Fit from preprocessed context
             classifier.fit_from_preprocessed(
@@ -235,8 +235,8 @@ def train_tabpfn_model(
             logits_BLQ = logits_QBEL.permute(1, 2, 3, 0).reshape(B * E, L, Q)
 
             # Expand targets to (B*E, Q)
-            targets_BQ = batch.y_query.to(logits_BLQ.device)
-            targets_BQ = targets_BQ.expand(B * E, -1).long()
+            yq = batch.y_query if isinstance(batch.y_query, torch.Tensor) else torch.cat(batch.y_query)
+            targets_BQ = yq.to(logits_BLQ.device).expand(B * E, -1).long()
 
             loss = F.cross_entropy(logits_BLQ, targets_BQ)
             loss.backward()
