@@ -639,14 +639,61 @@ Example: ``12 -> 64 -> 64 -> 64 -> 32 -> 1``
 Loss Functions
 ^^^^^^^^^^^^^^
 
-Two loss functions compared via grid search:
+Two loss functions are compared via grid search:
 
-1. **Weighted BCE:** Per-pixel importance weights encode domain knowledge
-   (ground truth flight > fire pixels > other pixels). Configurable
-   importance parameters.
+1. **Weighted BCE:** Per-pixel importance-weighted binary cross-entropy:
 
-2. **SoftErrorRateLoss:** Directly optimizes (FN + FP) / P where P is
-   total fire pixels. Uses uniform weights with minority oversampling.
+   .. math::
+
+      \mathcal{L} = \frac{1}{N} \sum_i w_i \cdot \text{BCE}(p_i, y_i)
+
+   Weight for each pixel: :math:`w_i = \text{importance}_i \times \frac{N}{\text{category\_count}_i}`,
+   normalized so :math:`\text{mean}(w) = 1`. Importance categories:
+   GT no-fire (10x), fire pixels (5x), other (1x).
+
+2. **SoftErrorRateLoss:** Directly minimizes the error rate:
+
+   .. math::
+
+      \mathcal{L} = \frac{\text{soft\_FN} + \text{soft\_FP}}{P}
+
+   where :math:`P` = total actual fire pixels,
+   :math:`\text{soft\_FN} = \sum_{i: y_i=1} (1 - p_i)`, and
+   :math:`\text{soft\_FP} = \sum_{i: y_i=0} p_i`.
+   True negatives (TN) are not in the loss. Uses uniform weights with
+   minority oversampling.
+
+**Evaluation metric:**
+
+.. math::
+
+   \text{error\_rate} = \frac{FN + FP}{P}
+
+Grid Search Results
+^^^^^^^^^^^^^^^^^^^
+
+49 configurations searched: 2 losses x 4 architectures x 3 learning
+rates (plus importance weight variations for BCE). Config file:
+``configs/grid_search.yaml``.
+
+**Best model (Run 37):**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Parameter
+     - Value
+   * - Loss function
+     - SoftErrorRateLoss
+   * - Architecture
+     - 12 -> 64 -> 32 -> 1
+   * - Error rate
+     - **0.031**
+   * - TP / FP / FN
+     - 9,009 / 221 / 59
+
+Saved to ``checkpoint/fire_detector_best.pt``.
 
 Training
 ^^^^^^^^

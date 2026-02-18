@@ -93,8 +93,8 @@ def plot_all(filepath: str):
     t4_hi = max(np.percentile(t4_valid, 99), 350)  # ensure fire shows up
 
     # ── Figure 1: 2×2 full-scene NDVI + T4 ────────────────────────────
-    fig, axes = plt.subplots(2, 2, figsize=(20, 14))
-    fig.suptitle('What Happens When We Grid: Native 8 m Pixels  →  28 m Grid Cells',
+    fig, axes = plt.subplots(2, 2, figsize=(22, 12))
+    fig.suptitle('What Happens When We Grid: Native 8 m Pixels  \u2192  28 m Grid Cells',
                  fontsize=28, fontweight='bold', y=0.98)
 
     # Top-left: Raw NDVI

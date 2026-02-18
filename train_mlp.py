@@ -545,7 +545,8 @@ def main() -> None:
 
     from lib.plotting import plot_convergence_curves
     plot_convergence_curves(results_path, out_path='plots/convergence_mlp.png',
-                            title='MLP Fire Detector — Training Convergence')
+                            title='MLP Fire Detector — Best Model Convergence',
+                            top_n=1)
     print('Done.')
 
 

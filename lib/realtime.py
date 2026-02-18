@@ -135,8 +135,9 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
                       alpha=0.92, edgecolor='gray'))
 
     # --- Title and labels ---
+    det_label = 'MLP' if detector_name == 'ml' else 'Threshold (T4\u2212T11)'
     ax.set_title(
-        f'Real-Time Fire Detection \u2014 Flight {flight_num}\n{comment}',
+        f'Real-Time Fire Detection [{det_label}] \u2014 Flight {flight_num}\n{comment}',
         fontsize=18, fontweight='bold')
     ax.set_xlabel('Longitude', fontsize=18)
     ax.set_ylabel('Latitude', fontsize=18)
@@ -148,7 +149,9 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
         Line2D([0], [0], marker='o', color='w', markerfacecolor='#FF00FF',
                markeredgecolor='black', markersize=10, label='Veg-confirmed fire'),
     ]
-    ax.legend(handles=legend_elements, loc='lower right', fontsize=18)
+    ax.legend(handles=legend_elements, loc='upper center',
+              bbox_to_anchor=(0.5, -0.04), ncol=2, fontsize=16,
+              framealpha=0.9, edgecolor='gray')
 
     plt.tight_layout()
     flight_clean = flight_num.replace('-', '')

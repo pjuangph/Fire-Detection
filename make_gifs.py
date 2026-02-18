@@ -147,6 +147,31 @@ def make_side_by_side(simple_frames: list[str], ml_frames: list[str],
     iio.imwrite(out_path, final, duration=durations, loop=0)
 
 
+def make_compare_png(simple_frames: list[str], ml_frames: list[str],
+                     out_path: str) -> None:
+    """Create a static side-by-side comparison PNG from the last frames."""
+    if not simple_frames or not ml_frames:
+        return
+    left = iio.imread(simple_frames[-1])
+    right = iio.imread(ml_frames[-1])
+
+    h = max(left.shape[0], right.shape[0])
+    channels = left.shape[2] if left.ndim == 3 else 1
+
+    def pad_to_h(img, target_h):
+        if img.shape[0] == target_h:
+            return img
+        padded = np.full((target_h, img.shape[1], channels), 255, dtype=np.uint8)
+        padded[:img.shape[0], :img.shape[1]] = img
+        return padded
+
+    left = pad_to_h(left, h)
+    right = pad_to_h(right, h)
+    sep = np.full((h, 4, channels), 200, dtype=np.uint8)
+    combined = np.concatenate([left, sep, right], axis=1)
+    iio.imwrite(out_path, combined)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Create animated GIFs from realtime fire detection frames.')
@@ -222,6 +247,13 @@ def main():
                 out_path, fps=args.fps)
             size_mb = os.path.getsize(out_path) / (1024 * 1024)
             print(f'  Size:   {size_mb:.1f} MB')
+
+        # Static comparison PNG (last frames side-by-side)
+        if flight_id in ml_flights and flight_id in simple_flights:
+            out_path = os.path.join('plots', f'compare_final_{flight_id}.png')
+            print(f'[Static] {out_path}')
+            make_compare_png(
+                simple_flights[flight_id], ml_flights[flight_id], out_path)
 
         print()
 

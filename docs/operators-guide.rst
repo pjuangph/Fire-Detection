@@ -113,6 +113,21 @@ What Each Script Produces
    * - ``compare_fire_detectors.py``
      - Per-flight ML vs threshold comparison
      - (stdout table)
+   * - ``train_mlp.py``
+     - Train MLP fire detector (single run or grid search)
+     - ``checkpoint/fire_detector_best.pt``
+   * - ``realtime_mlp.py``
+     - Real-time simulation using MLP detector
+     - ``plots/realtime_*/frame_*.png``
+   * - ``make_gifs.py``
+     - Create animated GIFs from real-time frames
+     - ``plots/*.gif``
+   * - ``create_presentation.py``
+     - Generate presentation slides from results
+     - ``presentation/``
+   * - ``run_realtime.sh``
+     - Shell script to run all real-time simulations
+     - (runs other scripts)
 
 
 Reading the Outputs
@@ -121,14 +136,16 @@ Reading the Outputs
 Fire Overlay Colors
 ^^^^^^^^^^^^^^^^^^^
 
-- **Red dots**: Fire detections that passed the absolute temperature
-  threshold (T4 > 325 K daytime, 310 K nighttime).
-- **Orange dots** (in ``realtime_fire.py``): **Vegetation-confirmed
-  fire** -- pixels where thermal fire is independently confirmed by
-  NDVI drop (vegetation loss). Higher confidence than red-only.
-- **Orange dots** (in ``detect_fire.py``): Contextual anomaly
+- **Red dots with black edge**: Fire detections that passed the absolute
+  temperature threshold (T4 > 325 K daytime, 310 K nighttime).
+- **Magenta dots** (#FF00FF, in ``realtime_fire.py``):
+  **Vegetation-confirmed fire** -- pixels where thermal fire is
+  independently confirmed by NDVI drop (vegetation loss). Higher
+  confidence than red-only.
+- **Magenta dots** (#FF00FF, in ``detect_fire.py``): Contextual anomaly
   detections -- pixels that are anomalously warm relative to their
   neighbors but below the absolute threshold.
+- **Black bounding boxes**: Bounding boxes around detected fire zones.
 
 Background Layer
 ^^^^^^^^^^^^^^^^
@@ -147,6 +164,13 @@ levels, not from clock time. This handles cloud cover correctly --
 if clouds block sunlight, those pixels show thermal background even
 during geometric daytime.
 
+Plot Title (Real-Time Simulation)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The real-time simulation plot title now shows the **detector type** being
+used (e.g., "Threshold Detector" or "MLP Detector"). This makes it
+immediately clear which detection method produced the displayed results.
+
 Stats Box (Real-Time Simulation)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -156,7 +180,7 @@ The ``realtime_fire.py`` output includes a stats box showing:
 - **Coverage**: Percentage of grid cells with data so far.
 - **Fire pixels**: Total confirmed fire pixels (after multi-pass filter).
 - **Veg-confirmed**: Fire pixels independently confirmed by vegetation
-  loss (NDVI drop from baseline). These are shown as orange dots.
+  loss (NDVI drop from baseline). These are shown as magenta dots.
 - **Total fire area**: Estimated area in m\ :sup:`2` or hectares.
 - **Fire zones**: Number of spatially connected fire regions.
 - **Zone breakdown**: Top 5 zones by size with individual areas.

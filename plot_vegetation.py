@@ -42,17 +42,19 @@ def plot_vegetation_flight(mosaic, flight_num, comment, n_files):
 
     extent = [lon_axis[0], lon_axis[-1], lat_axis[-1], lat_axis[0]]
 
-    fig, axes = plt.subplots(2, 2, figsize=(18, 14))
+    fig, axes = plt.subplots(2, 2, figsize=(20, 14))
     fig.suptitle(f'Vegetation Analysis — Flight {flight_num}\n{comment}, '
                  f'{n_files} flight lines',
-                 fontsize=14, fontweight='bold')
+                 fontsize=22, fontweight='bold')
 
     # --- Top-left: NDVI map ---
     ax = axes[0, 0]
     im = ax.imshow(grid_NDVI, extent=extent, aspect='equal',
-                   cmap='RdYlGn', vmin=-0.2, vmax=0.8)
-    ax.set_title('NDVI (Vegetation Index)')
-    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label='NDVI')
+                   cmap='RdYlGn', vmin=0.0, vmax=0.6)
+    ax.set_title('NDVI (Vegetation Index)', fontsize=18, fontweight='bold')
+    cb = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cb.set_label('NDVI', fontsize=14)
+    cb.ax.tick_params(labelsize=12)
 
     # NDVI stats
     valid_ndvi = grid_NDVI[np.isfinite(grid_NDVI)]
@@ -61,9 +63,9 @@ def plot_vegetation_flight(mosaic, flight_num, comment, n_files):
         bare_count = np.sum(valid_ndvi <= 0.2)
         ax.text(0.02, 0.02,
                 f'Vegetation (>0.3): {veg_count:,}\n'
-                f'Bare soil (≤0.2): {bare_count:,}\n'
+                f'Bare soil (\u22640.2): {bare_count:,}\n'
                 f'Mean NDVI: {np.nanmean(valid_ndvi):.3f}',
-                transform=ax.transAxes, fontsize=8,
+                transform=ax.transAxes, fontsize=13,
                 verticalalignment='bottom',
                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.85),
                 family='monospace')
@@ -71,15 +73,16 @@ def plot_vegetation_flight(mosaic, flight_num, comment, n_files):
     # --- Top-right: NDVI + fire overlay ---
     ax = axes[0, 1]
     ax.imshow(grid_NDVI, extent=extent, aspect='equal',
-              cmap='RdYlGn', vmin=-0.2, vmax=0.8)
+              cmap='RdYlGn', vmin=0.0, vmax=0.6)
     fire_count = np.sum(grid_fire)
     if fire_count > 0:
         fire_rows, fire_cols = np.where(grid_fire)
         fire_lats = lat_axis[0] + (lat_axis[-1] - lat_axis[0]) * fire_rows / (len(lat_axis) - 1)
         fire_lons = lon_axis[0] + (lon_axis[-1] - lon_axis[0]) * fire_cols / (len(lon_axis) - 1)
-        ax.scatter(fire_lons, fire_lats, s=0.3, c='red', alpha=0.7,
+        ax.scatter(fire_lons, fire_lats, s=2, c='red', alpha=0.8,
+                   edgecolors='black', linewidths=0.2,
                    label=f'Fire ({fire_count:,} cells)')
-        ax.legend(loc='upper right', markerscale=15, fontsize=9)
+        ax.legend(loc='upper right', markerscale=15, fontsize=14)
 
         # NDVI at fire locations
         fire_ndvi = grid_NDVI[grid_fire]
@@ -90,11 +93,11 @@ def plot_vegetation_flight(mosaic, flight_num, comment, n_files):
                     f'  Mean: {np.nanmean(fire_ndvi_valid):.3f}\n'
                     f'  Min:  {np.nanmin(fire_ndvi_valid):.3f}\n'
                     f'  Max:  {np.nanmax(fire_ndvi_valid):.3f}',
-                    transform=ax.transAxes, fontsize=8,
+                    transform=ax.transAxes, fontsize=13,
                     verticalalignment='bottom',
                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.85),
                     family='monospace')
-    ax.set_title('Fire on Vegetation Map')
+    ax.set_title('Fire on Vegetation Map', fontsize=18, fontweight='bold')
 
     # --- Bottom-left: Red band ---
     ax = axes[1, 0]
@@ -103,8 +106,11 @@ def plot_vegetation_flight(mosaic, flight_num, comment, n_files):
                       else (0, 1))
     im = ax.imshow(grid_Red, extent=extent, aspect='equal',
                    cmap='Reds', vmin=vmin_r, vmax=vmax_r)
-    ax.set_title('Red Band — 0.654 μm (absorbed by chlorophyll)')
-    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label='W/m²/sr/μm')
+    ax.set_title('Red Band — 0.654 \u03bcm (absorbed by chlorophyll)',
+                 fontsize=18, fontweight='bold')
+    cb = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cb.set_label('W/m\u00b2/sr/\u03bcm', fontsize=14)
+    cb.ax.tick_params(labelsize=12)
 
     # --- Bottom-right: NIR band ---
     ax = axes[1, 1]
@@ -113,12 +119,16 @@ def plot_vegetation_flight(mosaic, flight_num, comment, n_files):
                       else (0, 1))
     im = ax.imshow(grid_NIR, extent=extent, aspect='equal',
                    cmap='Greens', vmin=vmin_n, vmax=vmax_n)
-    ax.set_title('NIR Band — 0.866 μm (reflected by vegetation)')
-    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label='W/m²/sr/μm')
+    ax.set_title('NIR Band — 0.866 \u03bcm (reflected by vegetation)',
+                 fontsize=18, fontweight='bold')
+    cb = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cb.set_label('W/m\u00b2/sr/\u03bcm', fontsize=14)
+    cb.ax.tick_params(labelsize=12)
 
     for ax in axes.flat:
-        ax.set_xlabel('Longitude')
-        ax.set_ylabel('Latitude')
+        ax.set_xlabel('Longitude', fontsize=16)
+        ax.set_ylabel('Latitude', fontsize=16)
+        ax.tick_params(labelsize=12)
 
     plt.tight_layout()
     os.makedirs('plots', exist_ok=True)

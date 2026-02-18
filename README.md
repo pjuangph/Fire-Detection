@@ -504,7 +504,7 @@ A drop of 0.15 is conservative enough to avoid false triggers from atmospheric o
 
 In the real-time simulation output:
 - **Red dots**: Thermal-only fire detections
-- **Orange dots**: Vegetation-confirmed fire (thermal + NDVI drop)
+- **Magenta dots** (#FF00FF): Vegetation-confirmed fire (thermal + NDVI drop)
 - The stats box shows the count of veg-confirmed pixels
 
 ### Requirements
@@ -541,9 +541,11 @@ convert -delay 50 -loop 0 plots/realtime_2480104/frame_*.png plots/realtime_2480
 
 - **Green background (NDVI)**: Healthy vegetation during daytime flights
 - **Brown/red areas**: Burn scars where vegetation has been consumed (visible after vegetation-loss confirmation updates the NDVI layer)
-- **Red dots**: Thermal fire detections
-- **Orange dots**: Vegetation-confirmed fire (higher confidence)
-- **Yellow labels**: Fire zone IDs with area in m² or hectares
+- **Red dots** (s=6, black edge): Thermal fire detections
+- **Magenta dots** (#FF00FF, s=6, black edge): Vegetation-confirmed fire (higher confidence)
+- **Black bounding boxes** (linewidth=3): Top 3 fire zones by area
+- **Neon green zone labels** (#39FF14) with black stroke: Zone IDs with area
+- **Title**: Shows detector type — "[MLP]" or "[Threshold (T4-T11)]"
 - **Stats box**: Sweep count, coverage, fire pixels, veg-confirmed count, zone breakdown
 
 ### Dynamic Grid Expansion
@@ -557,34 +559,89 @@ Unlike `mosaic_flight.py` which pre-scans all files to determine the grid bounds
 
 ## ML Fire Detection
 
-`tune_fire_prediction.py` trains a neural network to classify fire vs. non-fire locations using 12 aggregate features, with YAML-driven grid search over loss function, architecture, learning rate, and importance weights.
+`tune_fire_prediction.py` trains a neural network to classify fire vs. non-fire grid cells using 12 aggregate features per location, with YAML-driven grid search over loss function, architecture, learning rate, and importance weights.
 
-### Features
+### Features (12 Aggregate Per Grid Cell)
 
 | Feature | Source | Units | Why It Helps |
 |---------|--------|-------|-------------|
-| T4 | Channel 31 (3.9 μm) | K | Primary fire signal — fire is extremely bright at this wavelength |
-| T11 | Channel 48 (11.3 μm) | K | Background temperature — provides thermal context |
-| ΔT | T4 − T11 | K | Spectral fingerprint — fire has disproportionately high T4 vs T11 |
-| SWIR | Channel 22 (2.2 μm) | W/m²/sr/μm | Solar reflection — high SWIR with high T4 suggests reflection, not fire |
+| T4_max | Channel 31 (3.9 μm) max | K | Hottest observation — captures peak fire intensity |
+| T4_mean | Channel 31 (3.9 μm) mean | K | Average thermal signal over all passes |
+| T11_mean | Channel 48 (11.3 μm) mean | K | Background temperature context |
+| dT_max | max(T4 − T11) | K | Peak spectral fingerprint — fire has disproportionately high T4 vs T11 |
+| SWIR_max | Channel 22 (2.2 μm) max | W/m²/sr/μm | Peak solar reflection — high SWIR suggests sun glint, not fire |
+| SWIR_mean | Channel 22 (2.2 μm) mean | W/m²/sr/μm | Average reflection level |
+| Red_mean | Channel 5 (0.654 μm) mean | W/m²/sr/μm | Visible red reflectance for vegetation context |
+| NIR_mean | Channel 9 (0.866 μm) mean | W/m²/sr/μm | Near-IR reflectance for vegetation context |
+| NDVI_min | min(NDVI) | unitless | Lowest vegetation index — drops sharply at burn scars |
+| NDVI_mean | mean(NDVI) | unitless | Average vegetation health |
+| NDVI_drop | baseline − current NDVI | unitless | Vegetation loss magnitude — positive values indicate burning |
+| obs_count | observation count | count | Number of passes observing this cell — more passes = higher confidence |
 
-### Loss Function: Soft Dice Loss
+### Loss Functions
 
-Standard losses like binary cross-entropy (BCE) are diluted by the massive number of true negatives (~99.4% of pixels are not fire). Dice Loss operates on absolute TP/FP/FN counts:
+Two loss functions are supported, each with different strengths:
 
-$$\text{Dice Loss} = 1 - \frac{2 \cdot TP}{2 \cdot TP + FP + FN}$$
+**1. Weighted BCE (Binary Cross-Entropy)**
 
-True negatives (TN) **do not appear** in the formula. 100 FP out of 1,000 pixels gives the same loss as 100 FP out of 1,000,000 pixels. Every false positive and every missed fire directly degrades the score.
+$$L = \frac{1}{N} \sum_i w_i \cdot \text{BCE}(p_i, y_i)$$
 
-For training, we use a combined **Dice + BCE** loss (50/50 weight) — BCE provides per-pixel gradient signals that help early training converge when Dice alone gets stuck.
+where weights = importance x inverse_frequency, normalized to mean=1.
+
+| Category | Importance Weight | Rationale |
+|----------|:-:|-----------|
+| GT flight (pre-burn) | 10x | Learning "no fire" from ground truth is critical |
+| Fire pixels | 5x | Fire is rare (~0.6% of cells); upweight to avoid ignoring |
+| Other | 1x | Background majority class |
+
+**Pros:** Stable gradients, per-pixel learning signal.
+**Cons:** Indirectly optimizes the error rate metric.
+
+**2. SoftErrorRateLoss**
+
+$$L = \frac{\text{soft\_FN} + \text{soft\_FP}}{P}$$
+
+where soft_FP = sum(p * (1-y)), soft_FN = sum((1-p) * y), and P = total actual fire pixels.
+
+This **directly minimizes the evaluation metric**. True negatives (TN) do not appear in the loss, so class imbalance is handled naturally without importance weights.
 
 ### Architecture
 
+Variable-depth MLP defined via YAML grid search. Best model:
+
 ```
-Input (4 features) → Linear(64) → ReLU → Linear(32) → ReLU → Linear(1) → Sigmoid
+Input (12 features) → Linear(64) → ReLU → Linear(32) → ReLU → Linear(1) → Sigmoid
 ```
 
-2,337 parameters. Trained with minority class oversampling (fire upsampled to 50/50 balance).
+2,945 parameters (~12 KB). Trained with minority class oversampling (fire upsampled to 50/50 balance).
+
+### Grid Search
+
+49 total runs: 2 losses x 4 architectures x 3 learning rates (x 3 weight configs for BCE only).
+
+- **Config**: `configs/grid_search.yaml`
+- **Results**: `results/grid_search_mlp_results.json`
+- **Best model**: auto-saved to `checkpoint/fire_detector_best.pt`
+
+### Best Model Results (Run 37)
+
+SoftErrorRateLoss, architecture [64, 32], lr = 0.01:
+
+| Metric | Value |
+|--------|-------|
+| error_rate | **0.031** = (FN + FP) / P |
+| TP | 9,009 |
+| FP | 221 |
+| FN | 59 |
+| TN | 519,558 |
+| Precision | 0.976 |
+| Recall | 0.993 |
+
+### Evaluation Metric
+
+$$\text{error\_rate} = \frac{FN + FP}{P}$$
+
+where P = total actual fire pixels. This penalizes both false alarms (FP) and missed fires (FN) equally. Unlike accuracy or F1, it is not diluted by the massive number of true negatives.
 
 ### Train/Test Split
 
@@ -695,7 +752,13 @@ The script will prompt for your NASA Earthdata credentials on first run and cach
 | `plot_vegetation.py` | 2x2 NDVI vegetation maps with fire overlay (daytime flights) |
 | `realtime_fire.py` | Real-time sweep-by-sweep fire detection simulation with fire zone labels |
 | `tune_fire_prediction.py` | YAML-driven grid search for MLP fire detector (loss, architecture, LR, weights) |
+| `train_mlp.py` | YAML-driven MLP grid search (`--config configs/grid_search_mlp.yaml`) |
+| `realtime_mlp.py` | MLP-specific realtime wrapper (`--config configs/best_model.yaml`) |
 | `compare_fire_detectors.py` | Per-flight ML vs threshold comparison table |
+| `make_gifs.py` | Create animated GIFs from realtime frames |
+| `create_presentation.py` | Generate PowerPoint presentation from results |
+| `run_realtime.sh` | Run both detectors (threshold + MLP) and create GIFs |
+| `generate_plots.sh` | Regenerate all static plots |
 
 ```bash
 python detect_fire.py
@@ -730,9 +793,18 @@ This produces one PNG per flight in `plots/`, each with a 2x2 layout (burn locat
 ```bash
 python tune_fire_prediction.py --config configs/grid_search.yaml
 python tune_fire_prediction.py --loss bce --layers 64 64 64 32   # single run
+python train_mlp.py --config configs/grid_search_mlp.yaml         # MLP-specific grid search
 ```
 
-Grid search results are saved to `results/grid_search_results.json`. The best model is automatically copied to `checkpoint/fire_detector_best.pt` for use by `realtime_fire.py --detector ml`.
+Grid search results are saved to `results/grid_search_mlp_results.json`. The best model is automatically copied to `checkpoint/fire_detector_best.pt` for use by `realtime_fire.py --detector ml` or `realtime_mlp.py`.
+
+```bash
+python realtime_mlp.py --config configs/best_model.yaml   # MLP realtime with best model config
+python make_gifs.py                                        # create animated GIFs from frames
+python create_presentation.py                              # generate PowerPoint presentation
+bash run_realtime.sh                                       # run both detectors + create GIFs
+bash generate_plots.sh                                     # regenerate all static plots
+```
 
 ### Data
 

@@ -383,6 +383,136 @@ def create_presentation():
                     Inches(0), Inches(0), width=Inches(13.333))
 
     # ════════════════════════════════════════════════════════════════════
+    # SLIDE — Loss Functions for Fire Detection
+    # ════════════════════════════════════════════════════════════════════
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_slide_bg(slide, WHITE)
+    _add_title_bar(slide, 'Loss Functions for Fire Detection')
+    _add_subtitle(slide, 'Two approaches: pixel-weighted BCE vs direct error-rate optimization')
+
+    # Left column — Weighted BCE
+    _add_textbox(slide, Inches(0.5), Inches(2.0), Inches(5.5), Inches(0.5),
+                 'Weighted Binary Cross-Entropy', font_size=22,
+                 color=DARK_TEXT, bold=True)
+    _add_bullet_frame(slide, Inches(0.5), Inches(2.6), Inches(5.5), Inches(4.0), [
+        'L = (1/N) \u00d7 \u03a3 w\u1d62 \u00b7 BCE(p\u1d62, y\u1d62)',
+        'w\u1d62 = importance \u00d7 (N / category_count)',
+        'Weights normalized to mean = 1',
+        '',
+        'Categories & importance:',
+        '  Ground-truth flight: 10\u00d7',
+        '  Fire pixels: 5\u00d7',
+        '  Other pixels: 1\u00d7',
+        '',
+        '\u2705 Stable gradients, per-pixel signal',
+        '\u274c Indirectly optimizes error rate',
+    ], font_size=14, color=DARK_TEXT)
+
+    # Right column — SoftErrorRateLoss
+    _add_textbox(slide, Inches(7.0), Inches(2.0), Inches(5.5), Inches(0.5),
+                 'SoftErrorRateLoss', font_size=22,
+                 color=DARK_TEXT, bold=True)
+    _add_bullet_frame(slide, Inches(7.0), Inches(2.6), Inches(5.5), Inches(4.0), [
+        'L = (soft_FN + soft_FP) / P',
+        'soft_FP = \u03a3( p \u00b7 (1 \u2212 y) )',
+        'soft_FN = \u03a3( (1 \u2212 p) \u00b7 y )',
+        'P = total actual fire pixels',
+        '',
+        'True negatives do NOT appear in loss',
+        '\u2192 Class imbalance handled naturally',
+        '',
+        '\u2705 Directly minimizes (FN+FP)/P',
+        '\u2705 Best model uses this loss',
+        '\u274c Less stable early in training',
+    ], font_size=14, color=DARK_TEXT)
+
+    # Bottom callout — Evaluation
+    shape = slide.shapes.add_shape(
+        MSO_SHAPE.ROUNDED_RECTANGLE, Inches(1.5), Inches(6.5),
+        Inches(10.3), Inches(0.8))
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = DARK_BG
+    shape.line.fill.background()
+    _add_textbox(slide, Inches(1.8), Inches(6.55), Inches(9.5), Inches(0.7),
+                 'Evaluation metric:  error_rate = (FN + FP) / P,  '
+                 'where P = total actual fire pixels   |   '
+                 'Best model uses SoftErrorRateLoss',
+                 font_size=16, color=WHITE, bold=True,
+                 alignment=PP_ALIGN.CENTER)
+
+    # ════════════════════════════════════════════════════════════════════
+    # SLIDE — MLP Hyperparameter Grid Search
+    # ════════════════════════════════════════════════════════════════════
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_slide_bg(slide, WHITE)
+    _add_title_bar(slide, 'MLP Hyperparameter Grid Search')
+    _add_subtitle(slide, '49 runs: 2 losses \u00d7 4 architectures \u00d7 3 learning rates '
+                         '(\u00d7 3 weight configs for BCE)')
+
+    # Search space table
+    search_rows = [
+        ('Parameter', 'Values Tested'),
+        ('Loss Function', 'Weighted BCE,  SoftErrorRateLoss'),
+        ('Architecture', '[64, 32],  [64, 64, 64, 32],  [128, 64, 32],  [128, 128, 128, 64]'),
+        ('Learning Rate', '0.01,  0.001,  0.0001'),
+        ('Importance Weights\n(BCE only)', 'gt=10/fire=5/other=1  (default)\n'
+                                           'gt=15/fire=3/other=1  (heavy FP penalty)\n'
+                                           'gt=5/fire=10/other=1  (heavy FN penalty)'),
+    ]
+    tbl = slide.shapes.add_table(len(search_rows), 2,
+                                 Inches(0.5), Inches(2.0),
+                                 Inches(7.5), Inches(3.5)).table
+    tbl.columns[0].width = Inches(2.5)
+    tbl.columns[1].width = Inches(5.0)
+    for ri, (k, v) in enumerate(search_rows):
+        for ci, val in enumerate((k, v)):
+            cell = tbl.cell(ri, ci)
+            cell.text = val
+            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+            for p in cell.text_frame.paragraphs:
+                p.font.size = Pt(14)
+                p.font.name = 'Calibri'
+                if ri == 0:
+                    p.font.bold = True
+                    p.font.color.rgb = WHITE
+                else:
+                    p.font.color.rgb = DARK_TEXT
+                    if ci == 0:
+                        p.font.bold = True
+            if ri == 0:
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = DARK_BG
+            elif ri % 2 == 0:
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = VERY_LIGHT
+
+    # Best model callout box
+    shape = slide.shapes.add_shape(
+        MSO_SHAPE.ROUNDED_RECTANGLE, Inches(8.5), Inches(2.0),
+        Inches(4.3), Inches(4.5))
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = RGBColor(0xE8, 0xF5, 0xE9)
+    shape.line.color.rgb = RGBColor(0x2E, 0x7D, 0x32)
+    shape.line.width = Pt(2)
+
+    _add_textbox(slide, Inches(8.8), Inches(2.1), Inches(3.8), Inches(0.5),
+                 '\u2b50 Best Model: Run 37', font_size=20,
+                 color=RGBColor(0x2E, 0x7D, 0x32), bold=True)
+    _add_bullet_frame(slide, Inches(8.8), Inches(2.7), Inches(3.8), Inches(3.5), [
+        'Loss: SoftErrorRateLoss',
+        'Architecture: 12 \u2192 64 \u2192 32 \u2192 1',
+        'Learning Rate: 0.01',
+        'Parameters: 2,945',
+        'Size: ~12 KB',
+        '',
+        'Error Rate: 0.031',
+        'TP: 9,009   FP: 221',
+        'FN: 59       TN: 519,558',
+        'Precision: 0.976',
+        'Recall: 0.993',
+    ], font_size=14, color=DARK_TEXT)
+
+    # ════════════════════════════════════════════════════════════════════
     # SLIDE 9 — MLP Results
     # ════════════════════════════════════════════════════════════════════
     slide = prs.slides.add_slide(prs.slide_layouts[6])
