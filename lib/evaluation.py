@@ -62,9 +62,10 @@ def evaluate(
     else:
         # PyTorch (FireMLP)
         model.eval()
+        device = next(model.parameters()).device
         with torch.no_grad():
-            logits = model(torch.tensor(X, dtype=torch.float32))
-            probs = torch.sigmoid(logits).numpy()
+            logits = model(torch.tensor(X, dtype=torch.float32, device=device))
+            probs = torch.sigmoid(logits).cpu().numpy()
 
     preds = (probs >= threshold).astype(np.float32)
 

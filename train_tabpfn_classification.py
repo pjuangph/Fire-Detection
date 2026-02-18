@@ -130,6 +130,8 @@ def train_tabpfn_model(
         raise ValueError(
             f"Expected 1 internal model, got {len(classifier.models_)}.")
     model = classifier.models_[0]
+    device = torch.device(device_str)
+    model.to(device)
     model.train()
 
     optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -138,10 +140,15 @@ def train_tabpfn_model(
     start_epoch = 0
     if resume_from and os.path.isfile(resume_from):
         ckpt = torch.load(resume_from, weights_only=False,
-                          map_location=device_str)
+                          map_location=device)
         model.load_state_dict(ckpt['model_state_dict'])
         if 'optimizer_state_dict' in ckpt:
             optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+            # Ensure optimizer state tensors are on the correct device
+            for state in optimizer.state.values():
+                for k, v in state.items():
+                    if isinstance(v, torch.Tensor):
+                        state[k] = v.to(device)
         start_epoch = ckpt.get('epoch', 0)
         if not quiet:
             print(f'  Resuming from epoch {start_epoch}/{n_epochs}')
@@ -205,6 +212,12 @@ def train_tabpfn_model(
 
         for batch in progress:
             optimizer.zero_grad(set_to_none=True)
+
+            # Move batch tensors to training device
+            batch.X_context = batch.X_context.to(device)
+            batch.y_context = batch.y_context.to(device)
+            batch.X_query = batch.X_query.to(device)
+            batch.y_query = batch.y_query.to(device)
 
             # Fit from preprocessed context
             classifier.fit_from_preprocessed(
