@@ -750,15 +750,34 @@ The script will prompt for your NASA Earthdata credentials on first run and cach
 | `mosaic_flight.py` | Assemble all flight lines into a single georeferenced mosaic per flight with multi-pass consistency filter |
 | `plot_burn_locations.py` | Per-flight 2x2 analysis: burn locations, T4, SWIR, and detection space scatter |
 | `plot_vegetation.py` | 2x2 NDVI vegetation maps with fire overlay (daytime flights) |
+| `plot_grid_resolution.py` | Native (~8 m) vs gridded (28 m) resolution comparison |
+| `plot_presentation_diagrams.py` | Architecture and flow diagrams for presentation |
 | `realtime_fire.py` | Real-time sweep-by-sweep fire detection simulation with fire zone labels |
-| `tune_fire_prediction.py` | YAML-driven grid search for MLP fire detector (loss, architecture, LR, weights) |
-| `train_mlp.py` | YAML-driven MLP grid search (`--config configs/grid_search_mlp.yaml`) |
 | `realtime_mlp.py` | MLP-specific realtime wrapper (`--config configs/best_model.yaml`) |
+| `realtime_tabpfn_classification.py` | TabPFN classifier realtime simulation |
+| `realtime_tabpfn_regression.py` | TabPFN regressor realtime simulation |
+| `train_mlp.py` | YAML-driven MLP grid search (`--config configs/grid_search_mlp.yaml`) |
+| `train_tabpfn_classification.py` | TabPFN classification grid search |
+| `train_tabpfn_regression.py` | TabPFN regression grid search |
+| `tune_fire_prediction-MLP.py` | Legacy MLP grid search (superseded by `train_mlp.py`) |
 | `compare_fire_detectors.py` | Per-flight ML vs threshold comparison table |
-| `make_gifs.py` | Create animated GIFs from realtime frames |
+| `make_gifs.py` | Create animated GIFs and pairwise detector comparison GIFs |
 | `create_presentation.py` | Generate PowerPoint presentation from results |
-| `run_realtime.sh` | Run both detectors (threshold + MLP) and create GIFs |
-| `generate_plots.sh` | Regenerate all static plots |
+| `generate_plots.sh` | Run all visualization, realtime simulations, and GIF creation |
+| `train-all-models.sh` | Train MLP + TabPFN classification + TabPFN regression sequentially |
+| `reset_project.sh` | Clean up generated artifacts (`--plots`, `--model`, `--stale`) |
+
+### Typical Workflow
+
+```bash
+python download_data.py                     # 1. Fetch MASTER data (~9 GB)
+bash train-all-models.sh                    # 2. Train MLP + both TabPFN models
+bash generate_plots.sh                      # 3. Generate all plots + GIFs
+python create_presentation.py               # 4. Build PowerPoint presentation
+```
+
+For the full project structure including library modules and config files, see the
+[Operator's Guide](docs/operators-guide.rst).
 
 ```bash
 python detect_fire.py

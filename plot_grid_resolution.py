@@ -101,7 +101,7 @@ def plot_all(filepath: str):
     ax = axes[0, 0]
     v = np.isfinite(ndvi) & valid
     sc = ax.scatter(lon[v], lat[v], c=ndvi[v], s=0.15,
-                    cmap='RdYlGn', vmin=-0.2, vmax=0.8, alpha=0.9,
+                    cmap='RdYlGn', vmin=0.0, vmax=0.4, alpha=0.9,
                     rasterized=True)
     ax.set_title('Raw Vegetation (NDVI)  —  ~8 m pixels',
                  fontsize=20, fontweight='bold')
@@ -117,7 +117,7 @@ def plot_all(filepath: str):
     # Top-right: Gridded NDVI
     ax = axes[0, 1]
     im = ax.imshow(ndvi_grid, extent=extent, aspect='auto',
-                   cmap='RdYlGn', vmin=-0.2, vmax=0.8,
+                   cmap='RdYlGn', vmin=0.0, vmax=0.4,
                    interpolation='nearest', origin='upper')
     ax.set_title('Gridded Vegetation (NDVI)  —  28 m cells  (3× coarser)',
                  fontsize=20, fontweight='bold')
@@ -196,7 +196,7 @@ def plot_all(filepath: str):
          (lat > zoom_lat[0]) & (lat < zoom_lat[1]) &
          (lon > zoom_lon[0]) & (lon < zoom_lon[1]))
     sc = ax.scatter(lon[v], lat[v], c=ndvi[v], s=4,
-                    cmap='RdYlGn', vmin=-0.2, vmax=0.8, alpha=0.9)
+                    cmap='RdYlGn', vmin=0.0, vmax=0.4, alpha=0.9)
     ax.set_xlim(zoom_lon)
     ax.set_ylim(zoom_lat)
     ax.set_title('Raw NDVI  —  see individual trees and soil',
@@ -221,7 +221,7 @@ def plot_all(filepath: str):
     zoom_extent = [zoom_lon[0], zoom_lon[1], zoom_lat[0], zoom_lat[1]]
 
     im = ax.imshow(ndvi_grid[r0:r1, c0:c1], extent=zoom_extent, aspect='auto',
-                   cmap='RdYlGn', vmin=-0.2, vmax=0.8,
+                   cmap='RdYlGn', vmin=0.0, vmax=0.4,
                    interpolation='nearest', origin='upper')
     ax.set_title('Gridded NDVI  —  blockier, like a low-res photo',
                  fontsize=22, fontweight='bold')

@@ -28,6 +28,22 @@ echo "=== MLP detector (realtime) ==="
 python realtime_fire.py --config configs/best_model.yaml
 
 echo ""
+echo "=== TabPFN Classification detector (realtime) ==="
+if [ -f configs/best_model_tabpfn_classification.yaml ]; then
+    python realtime_tabpfn_classification.py --config configs/best_model_tabpfn_classification.yaml
+else
+    echo "  Skipped: configs/best_model_tabpfn_classification.yaml not found (run training first)"
+fi
+
+echo ""
+echo "=== TabPFN Regression detector (realtime) ==="
+if [ -f configs/best_model_tabpfn_regression.yaml ]; then
+    python realtime_tabpfn_regression.py --config configs/best_model_tabpfn_regression.yaml
+else
+    echo "  Skipped: configs/best_model_tabpfn_regression.yaml not found (run training first)"
+fi
+
+echo ""
 echo "=== Creating GIFs ==="
 python make_gifs.py
 

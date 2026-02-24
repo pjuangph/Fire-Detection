@@ -38,7 +38,7 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
     if has_vnir:
         display_ndvi = compute_ndvi(gs['Red'], gs['NIR'])
         bg = ax.imshow(display_ndvi, extent=extent, aspect='equal',
-                       cmap='RdYlGn', vmin=-0.2, vmax=0.8)
+                       cmap='RdYlGn', vmin=0.0, vmax=0.4)
         cbar = plt.colorbar(bg, ax=ax, fraction=0.03, pad=0.02)
         cbar.set_label('NDVI', fontsize=18)
         cbar.ax.tick_params(labelsize=18)
@@ -135,7 +135,13 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
                       alpha=0.92, edgecolor='gray'))
 
     # --- Title and labels ---
-    det_label = 'MLP' if detector_name == 'ml' else 'Threshold (T4\u2212T11)'
+    _det_labels = {
+        'simple': 'Threshold (T4\u2212T11)',
+        'ml': 'MLP',
+        'tabpfn_classification': 'TabPFN Classification',
+        'tabpfn_regression': 'TabPFN Regression',
+    }
+    det_label = _det_labels.get(detector_name, detector_name)
     ax.set_title(
         f'Real-Time Fire Detection [{det_label}] \u2014 Flight {flight_num}\n{comment}',
         fontsize=18, fontweight='bold')

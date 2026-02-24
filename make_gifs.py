@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Create animated GIFs from realtime fire detection plot frames.
 
-Groups frames by detector and flight, produces one GIF per combination.
-Also creates side-by-side comparison GIFs (simple vs ML) per flight.
+Auto-discovers all detector prefixes (simple, ml, tabpfn_classification,
+tabpfn_regression, etc.) from frame filenames.  Produces one GIF per
+(detector, flight) combination and pairwise side-by-side comparison GIFs
+and static PNGs for every detector pair that shares a flight.
+
 Output goes to plots/gifs/.
 
 Usage:
@@ -15,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import itertools
 import os
 import sys
 
@@ -30,32 +34,40 @@ FLIGHT_INFO = {
     '2480106': ('24-801-06', 'Smoldering (daytime)'),
 }
 
+# Display labels for each detector prefix
+DETECTOR_LABELS = {
+    'simple': 'Threshold',
+    'ml': 'MLP',
+    'tabpfn_classification': 'TabPFN-Cls',
+    'tabpfn_regression': 'TabPFN-Reg',
+}
+
 FRAME_DIR = 'plots/realtime'
 OUT_DIR = 'plots/gifs'
 
 
-def find_flights(frame_dir: str, prefix: str) -> dict[str, list[str]]:
-    """Discover available flights for a given detector prefix.
+def discover_frames(frame_dir: str) -> dict[str, dict[str, list[str]]]:
+    """Discover all detector prefixes and their flights from frame PNGs.
 
-    Args:
-        frame_dir: Directory containing frame PNGs.
-        prefix: Detector prefix, e.g. 'ml' or 'simple'.
+    Frame naming convention: {prefix}-{flight_id}-{frame_num:03d}.png
+    Prefix may contain underscores but not hyphens.
 
     Returns:
-        Dict mapping flight ID (e.g. '2480103') to sorted list of PNG paths.
+        Dict mapping prefix -> {flight_id -> sorted list of PNG paths}.
     """
-    patterns = glob.glob(os.path.join(frame_dir, f'{prefix}-*.png'))
-    flights: dict[str, list[str]] = {}
-    for path in sorted(patterns):
-        basename = os.path.basename(path)
-        # ml-2480103-001.png -> 2480103
-        parts = basename.replace('.png', '').split('-')
+    all_pngs = sorted(glob.glob(os.path.join(frame_dir, '*.png')))
+    detectors: dict[str, dict[str, list[str]]] = {}
+    for path in all_pngs:
+        basename = os.path.basename(path).replace('.png', '')
+        parts = basename.split('-')
         if len(parts) >= 3:
+            prefix = parts[0]
             flight_id = parts[1]
-            flights.setdefault(flight_id, []).append(path)
-    for fid in flights:
-        flights[fid].sort()
-    return flights
+            detectors.setdefault(prefix, {}).setdefault(flight_id, []).append(path)
+    for prefix in detectors:
+        for fid in detectors[prefix]:
+            detectors[prefix][fid].sort()
+    return detectors
 
 
 def make_gif(frames: list[str], out_path: str, fps: int = 3,
@@ -89,13 +101,23 @@ def make_gif(frames: list[str], out_path: str, fps: int = 3,
     iio.imwrite(out_path, images, duration=durations, loop=loop)
 
 
-def make_side_by_side(simple_frames: list[str], ml_frames: list[str],
+def _pad_to_height(img: np.ndarray, target_h: int) -> np.ndarray:
+    """Pad image to target height with white rows at the bottom."""
+    if img.shape[0] == target_h:
+        return img
+    channels = img.shape[2] if img.ndim == 3 else 1
+    padded = np.full((target_h, img.shape[1], channels), 255, dtype=np.uint8)
+    padded[:img.shape[0], :img.shape[1]] = img
+    return padded
+
+
+def make_side_by_side(left_frames: list[str], right_frames: list[str],
                       out_path: str, fps: int = 3) -> None:
-    """Create a side-by-side comparison GIF (simple | ML) for matching frames.
+    """Create a side-by-side comparison GIF for matching frames.
 
     Uses the minimum frame count between both detectors.
     """
-    n = min(len(simple_frames), len(ml_frames))
+    n = min(len(left_frames), len(right_frames))
     if n == 0:
         return
 
@@ -104,24 +126,15 @@ def make_side_by_side(simple_frames: list[str], ml_frames: list[str],
     max_w = 0
 
     for i in range(n):
-        left = iio.imread(simple_frames[i])
-        right = iio.imread(ml_frames[i])
+        left = iio.imread(left_frames[i])
+        right = iio.imread(right_frames[i])
 
-        # Ensure same height
         h = max(left.shape[0], right.shape[0])
         channels = left.shape[2] if left.ndim == 3 else 1
 
-        def pad_to_h(img, target_h):
-            if img.shape[0] == target_h:
-                return img
-            padded = np.full((target_h, img.shape[1], channels), 255, dtype=np.uint8)
-            padded[:img.shape[0], :img.shape[1]] = img
-            return padded
+        left = _pad_to_height(left, h)
+        right = _pad_to_height(right, h)
 
-        left = pad_to_h(left, h)
-        right = pad_to_h(right, h)
-
-        # Add a thin separator
         sep = np.full((h, 4, channels), 200, dtype=np.uint8)
         combined = np.concatenate([left, sep, right], axis=1)
         images.append(combined)
@@ -147,26 +160,19 @@ def make_side_by_side(simple_frames: list[str], ml_frames: list[str],
     iio.imwrite(out_path, final, duration=durations, loop=0)
 
 
-def make_compare_png(simple_frames: list[str], ml_frames: list[str],
+def make_compare_png(left_frames: list[str], right_frames: list[str],
                      out_path: str) -> None:
     """Create a static side-by-side comparison PNG from the last frames."""
-    if not simple_frames or not ml_frames:
+    if not left_frames or not right_frames:
         return
-    left = iio.imread(simple_frames[-1])
-    right = iio.imread(ml_frames[-1])
+    left = iio.imread(left_frames[-1])
+    right = iio.imread(right_frames[-1])
 
     h = max(left.shape[0], right.shape[0])
     channels = left.shape[2] if left.ndim == 3 else 1
 
-    def pad_to_h(img, target_h):
-        if img.shape[0] == target_h:
-            return img
-        padded = np.full((target_h, img.shape[1], channels), 255, dtype=np.uint8)
-        padded[:img.shape[0], :img.shape[1]] = img
-        return padded
-
-    left = pad_to_h(left, h)
-    right = pad_to_h(right, h)
+    left = _pad_to_height(left, h)
+    right = _pad_to_height(right, h)
     sep = np.full((h, 4, channels), 200, dtype=np.uint8)
     combined = np.concatenate([left, sep, right], axis=1)
     iio.imwrite(out_path, combined)
@@ -188,14 +194,15 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
 
-    # Find both detector types
-    ml_flights = find_flights(args.frame_dir, 'ml')
-    simple_flights = find_flights(args.frame_dir, 'simple')
-
-    all_flight_ids = sorted(set(ml_flights.keys()) | set(simple_flights.keys()))
-    if not all_flight_ids:
+    # Auto-discover all detector prefixes and flights
+    detectors = discover_frames(args.frame_dir)
+    if not detectors:
         print(f'No frames found in {args.frame_dir}/')
         sys.exit(1)
+
+    prefixes = sorted(detectors.keys())
+    all_flight_ids = sorted(set(
+        fid for det in detectors.values() for fid in det.keys()))
 
     # Filter flights if specified
     if args.flights:
@@ -208,6 +215,7 @@ def main():
         sys.exit(1)
 
     print(f'Creating GIFs at {args.fps} fps')
+    print(f'Detectors found: {", ".join(prefixes)}')
     print(f'Output directory: {args.out_dir}/')
     print()
 
@@ -216,44 +224,45 @@ def main():
         label, condition = info
         cond_slug = condition.split()[0].lower()
 
-        # ML GIF
-        if flight_id in ml_flights:
-            frames = ml_flights[flight_id]
-            out_path = os.path.join(args.out_dir, f'ml_{flight_id}_{cond_slug}.gif')
-            print(f'[ML] Flight {label} ({condition})')
-            print(f'  Frames: {len(frames)} → {out_path}')
+        # --- Individual GIFs per detector ---
+        for prefix in prefixes:
+            if flight_id not in detectors.get(prefix, {}):
+                continue
+            frames = detectors[prefix][flight_id]
+            det_label = DETECTOR_LABELS.get(prefix, prefix)
+            out_path = os.path.join(
+                args.out_dir, f'{prefix}_{flight_id}_{cond_slug}.gif')
+            print(f'[{det_label}] Flight {label} ({condition})')
+            print(f'  Frames: {len(frames)} \u2192 {out_path}')
             make_gif(frames, out_path, fps=args.fps)
             size_mb = os.path.getsize(out_path) / (1024 * 1024)
             print(f'  Size:   {size_mb:.1f} MB')
 
-        # Simple threshold GIF
-        if flight_id in simple_flights:
-            frames = simple_flights[flight_id]
-            out_path = os.path.join(args.out_dir, f'simple_{flight_id}_{cond_slug}.gif')
-            print(f'[Simple] Flight {label} ({condition})')
-            print(f'  Frames: {len(frames)} → {out_path}')
-            make_gif(frames, out_path, fps=args.fps)
+        # --- Pairwise comparison GIFs and static PNGs ---
+        available = [p for p in prefixes
+                     if flight_id in detectors.get(p, {})]
+        for left_pfx, right_pfx in itertools.combinations(available, 2):
+            left_label = DETECTOR_LABELS.get(left_pfx, left_pfx)
+            right_label = DETECTOR_LABELS.get(right_pfx, right_pfx)
+            left_frames = detectors[left_pfx][flight_id]
+            right_frames = detectors[right_pfx][flight_id]
+
+            # Comparison GIF
+            gif_name = f'compare_{left_pfx}_vs_{right_pfx}_{flight_id}_{cond_slug}.gif'
+            out_path = os.path.join(args.out_dir, gif_name)
+            n = min(len(left_frames), len(right_frames))
+            print(f'[{left_label} vs {right_label}] Flight {label} ({condition})')
+            print(f'  Frames: {n} (side-by-side) \u2192 {out_path}')
+            make_side_by_side(left_frames, right_frames, out_path,
+                              fps=args.fps)
             size_mb = os.path.getsize(out_path) / (1024 * 1024)
             print(f'  Size:   {size_mb:.1f} MB')
 
-        # Side-by-side comparison GIF
-        if flight_id in ml_flights and flight_id in simple_flights:
-            out_path = os.path.join(args.out_dir, f'compare_{flight_id}_{cond_slug}.gif')
-            print(f'[Compare] Flight {label} ({condition})')
-            n = min(len(simple_flights[flight_id]), len(ml_flights[flight_id]))
-            print(f'  Frames: {n} (side-by-side) → {out_path}')
-            make_side_by_side(
-                simple_flights[flight_id], ml_flights[flight_id],
-                out_path, fps=args.fps)
-            size_mb = os.path.getsize(out_path) / (1024 * 1024)
-            print(f'  Size:   {size_mb:.1f} MB')
-
-        # Static comparison PNG (last frames side-by-side)
-        if flight_id in ml_flights and flight_id in simple_flights:
-            out_path = os.path.join('plots', f'compare_final_{flight_id}.png')
-            print(f'[Static] {out_path}')
-            make_compare_png(
-                simple_flights[flight_id], ml_flights[flight_id], out_path)
+            # Static comparison PNG (last frame)
+            png_name = f'compare_{left_pfx}_vs_{right_pfx}_{flight_id}.png'
+            png_path = os.path.join('plots', png_name)
+            print(f'[Static] {png_path}')
+            make_compare_png(left_frames, right_frames, png_path)
 
         print()
 

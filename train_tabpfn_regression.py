@@ -599,7 +599,7 @@ def write_best_model_config(best: dict[str, Any], checkpoint_path: str,
     """Write YAML config for the best model (consumed by realtime scripts)."""
     t = best['test']
     config = {
-        'detector': 'ml',
+        'detector': 'tabpfn_regression',
         'model_type': 'tabpfn_regression',
         'checkpoint': checkpoint_path,
         'threshold': 0.5,
