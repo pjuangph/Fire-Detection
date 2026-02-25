@@ -249,7 +249,9 @@ class _TabPFNFireDetector:
         self.threshold = threshold if threshold is not None else ckpt.get('threshold', 0.5)
 
         # Reconstruct classifier with random weights, then load trained weights
-        init_args = ckpt['classifier_init']
+        from lib.evaluation import auto_device
+        init_args = ckpt['classifier_init'].copy()
+        init_args['device'] = auto_device()  # override checkpoint device
         classifier = TabPFNClassifier(
             **init_args,
             fit_mode="batched",
@@ -266,6 +268,13 @@ class _TabPFNFireDetector:
 
         self.model = eval_clf  # has predict_proba()
 
+    def _batched_predict_proba(self, X: np.ndarray, batch_size: int = 1000) -> np.ndarray:
+        """Predict probabilities in batches to avoid MPS OOM."""
+        parts = []
+        for i in range(0, len(X), batch_size):
+            parts.append(self.model.predict_proba(X[i:i + batch_size])[:, 1])
+        return np.concatenate(parts)
+
     def predict_from_gs(self, gs: dict[str, Any]) -> np.ndarray:
         """Compute aggregate features from gs accumulators, run TabPFN.
 
@@ -280,7 +289,7 @@ class _TabPFNFireDetector:
 
         X = np.where(np.isfinite(features), features, 0.0).astype(np.float32)
         X = self.scaler.transform(X)
-        probs = self.model.predict_proba(X)[:, 1]
+        probs = self._batched_predict_proba(X)
 
         fire_mask[valid_mask] = probs >= self.threshold
         return fire_mask
@@ -295,7 +304,7 @@ class _TabPFNFireDetector:
 
         X = np.where(np.isfinite(features), features, 0.0).astype(np.float32)
         X = self.scaler.transform(X)
-        probs = self.model.predict_proba(X)[:, 1]
+        probs = self._batched_predict_proba(X)
 
         prob_grid[valid_mask] = probs
         return prob_grid
@@ -325,7 +334,9 @@ class _TabPFNRegressionDetector:
         self.threshold = threshold if threshold is not None else ckpt.get('threshold', 0.5)
 
         # Reconstruct regressor with random weights, then load trained weights
-        init_args = ckpt['regressor_init']
+        from lib.evaluation import auto_device
+        init_args = ckpt['regressor_init'].copy()
+        init_args['device'] = auto_device()  # override checkpoint device
         regressor = TabPFNRegressor(
             **init_args,
             fit_mode="batched",
@@ -342,6 +353,13 @@ class _TabPFNRegressionDetector:
 
         self.model = eval_reg  # has predict()
 
+    def _batched_predict(self, X: np.ndarray, batch_size: int = 1000) -> np.ndarray:
+        """Predict in batches to avoid MPS OOM."""
+        parts = []
+        for i in range(0, len(X), batch_size):
+            parts.append(self.model.predict(X[i:i + batch_size]))
+        return np.concatenate(parts)
+
     def predict_from_gs(self, gs: dict[str, Any]) -> np.ndarray:
         """Compute aggregate features from gs accumulators, run TabPFN regressor.
 
@@ -356,7 +374,7 @@ class _TabPFNRegressionDetector:
 
         X = np.where(np.isfinite(features), features, 0.0).astype(np.float32)
         X = self.scaler.transform(X)
-        probs = np.clip(self.model.predict(X), 0.0, 1.0)
+        probs = np.clip(self._batched_predict(X), 0.0, 1.0)
 
         fire_mask[valid_mask] = probs >= self.threshold
         return fire_mask
@@ -371,7 +389,7 @@ class _TabPFNRegressionDetector:
 
         X = np.where(np.isfinite(features), features, 0.0).astype(np.float32)
         X = self.scaler.transform(X)
-        probs = np.clip(self.model.predict(X), 0.0, 1.0)
+        probs = np.clip(self._batched_predict(X), 0.0, 1.0)
 
         prob_grid[valid_mask] = probs
         return prob_grid

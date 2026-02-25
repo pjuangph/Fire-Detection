@@ -163,9 +163,9 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
                 f'  Zone {zone_id}: {format_area(size * cell_area_m2)} '
                 f'({size:,} px)')
 
-    ax.text(0.02, 0.98, '\n'.join(stats_lines),
+    ax.text(0.02, 0.02, '\n'.join(stats_lines),
             transform=ax.transAxes, fontsize=18,
-            verticalalignment='top', family='monospace',
+            verticalalignment='bottom', family='monospace',
             bbox=dict(boxstyle='round', facecolor='white',
                       alpha=0.92, edgecolor='gray'))
 

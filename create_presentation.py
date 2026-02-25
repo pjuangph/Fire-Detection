@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Generate a starter PowerPoint presentation for Fire-Detection project."""
+"""Generate the Fire-Detection presentation (one-time use, then delete)."""
 
 from __future__ import annotations
 
 import os
 
+import yaml
+from PIL import Image
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
@@ -13,7 +15,7 @@ from pptx.enum.shapes import MSO_SHAPE
 
 
 # ── Colour palette ──────────────────────────────────────────────────────
-DARK_BG = RGBColor(0x1A, 0x1A, 0x2E)
+DARK_BG = RGBColor(0x33, 0x33, 0x33)
 ACCENT_RED = RGBColor(0xE0, 0x3C, 0x31)
 ACCENT_ORANGE = RGBColor(0xF4, 0x8C, 0x06)
 ACCENT_BLUE = RGBColor(0x3B, 0x82, 0xF6)
@@ -22,6 +24,8 @@ LIGHT_GRAY = RGBColor(0xCC, 0xCC, 0xCC)
 MED_GRAY = RGBColor(0x99, 0x99, 0x99)
 VERY_LIGHT = RGBColor(0xF0, 0xF0, 0xF0)
 DARK_TEXT = RGBColor(0x22, 0x22, 0x22)
+GREEN = RGBColor(0x2E, 0x7D, 0x32)
+GREEN_BG = RGBColor(0xE8, 0xF5, 0xE9)
 
 
 def _set_slide_bg(slide, color):
@@ -33,7 +37,7 @@ def _set_slide_bg(slide, color):
 
 def _add_textbox(slide, left, top, width, height, text, font_size=18,
                  color=WHITE, bold=False, alignment=PP_ALIGN.LEFT,
-                 font_name='Calibri'):
+                 font_name='Aptos'):
     txBox = slide.shapes.add_textbox(left, top, width, height)
     tf = txBox.text_frame
     tf.word_wrap = True
@@ -48,7 +52,7 @@ def _add_textbox(slide, left, top, width, height, text, font_size=18,
 
 
 def _add_bullet_frame(slide, left, top, width, height, items,
-                      font_size=16, color=WHITE, font_name='Calibri',
+                      font_size=16, color=WHITE, font_name='Aptos',
                       spacing=Pt(6)):
     txBox = slide.shapes.add_textbox(left, top, width, height)
     tf = txBox.text_frame
@@ -68,14 +72,12 @@ def _add_bullet_frame(slide, left, top, width, height, items,
 
 
 def _add_title_bar(slide, title_text):
-    """Dark accent bar at top with title text."""
     shape = slide.shapes.add_shape(
         MSO_SHAPE.RECTANGLE, Inches(0), Inches(0),
         Inches(13.333), Inches(1.2))
     shape.fill.solid()
     shape.fill.fore_color.rgb = DARK_BG
     shape.line.fill.background()
-
     _add_textbox(slide, Inches(0.6), Inches(0.15), Inches(12), Inches(0.9),
                  title_text, font_size=32, color=WHITE, bold=True)
 
@@ -97,20 +99,123 @@ def _safe_add_image(slide, path, left, top, width=None, height=None):
     return False
 
 
+def _center_image(slide, path, slide_w=Inches(13.333), slide_h=Inches(7.5)):
+    if not os.path.isfile(path):
+        return False
+    with Image.open(path) as img:
+        img_w, img_h = img.size
+    aspect = img_w / img_h
+    fit_h = slide_h
+    fit_w = int(fit_h * aspect)
+    if fit_w > slide_w:
+        fit_w = slide_w
+        fit_h = int(fit_w / aspect)
+    left = (slide_w - fit_w) // 2
+    top = (slide_h - fit_h) // 2
+    slide.shapes.add_picture(path, left, top, fit_w, fit_h)
+    return True
+
+
+def _make_table(slide, rows, left, top, width, height, col_widths=None):
+    """Helper: add a styled table and return the table object."""
+    tbl = slide.shapes.add_table(
+        len(rows), len(rows[0]), left, top, width, height).table
+    if col_widths:
+        for ci, w in enumerate(col_widths):
+            tbl.columns[ci].width = Inches(w)
+    for ri, row in enumerate(rows):
+        for ci, val in enumerate(row):
+            cell = tbl.cell(ri, ci)
+            cell.text = val
+            for p in cell.text_frame.paragraphs:
+                p.font.size = Pt(14)
+                p.font.name = 'Aptos'
+                if ri == 0:
+                    p.font.bold = True
+                    p.font.color.rgb = WHITE
+                else:
+                    p.font.color.rgb = DARK_TEXT
+                    if ci == 0:
+                        p.font.bold = True
+            if ri == 0:
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = DARK_BG
+            elif ri % 2 == 0:
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = VERY_LIGHT
+    return tbl
+
+
+def _load_yaml_metrics(path):
+    """Load metrics from a best_model YAML config, or return None."""
+    if not os.path.isfile(path):
+        return None
+    with open(path) as f:
+        cfg = yaml.safe_load(f)
+    return cfg.get('metrics')
+
+
+def _gif_slide(prs, title, gif_path, subtitle=None):
+    """Add a full-slide GIF animation with title bar."""
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_slide_bg(slide, WHITE)
+    _add_title_bar(slide, title)
+    if subtitle:
+        _add_subtitle(slide, subtitle)
+    added = _safe_add_image(slide, gif_path,
+                            Inches(0.5), Inches(1.5), width=Inches(12.3))
+    if not added:
+        _add_textbox(slide, Inches(1), Inches(3.5), Inches(11), Inches(1),
+                     f'[Animation not found: {gif_path}]',
+                     font_size=18, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
+    return slide
+
+
+def _metrics_slide(prs, title, subtitle, yaml_path, convergence_path, model_label):
+    """Add a results slide with metrics table + convergence plot."""
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_slide_bg(slide, WHITE)
+    _add_title_bar(slide, title)
+    _add_subtitle(slide, subtitle)
+
+    m = _load_yaml_metrics(yaml_path)
+    if m:
+        rows = [
+            ('Metric', 'Value'),
+            ('Error Rate', f'{m["error_rate"]:.4f}  (= (FP + FN) / P)'),
+            ('True Positives (TP)', f'{m["TP"]:,}'),
+            ('False Positives (FP)', f'{m["FP"]:,}'),
+            ('False Negatives (FN)', f'{m["FN"]:,}'),
+            ('True Negatives (TN)', f'{m["TN"]:,}'),
+            ('Precision', f'{m["precision"]:.4f}'),
+            ('Recall', f'{m["recall"]:.4f}'),
+        ]
+        _make_table(slide, rows, Inches(0.8), Inches(2.0),
+                    Inches(5.5), Inches(4.0), col_widths=[2.8, 2.7])
+    else:
+        _add_textbox(slide, Inches(0.8), Inches(3.5), Inches(5.5), Inches(1),
+                     f'{model_label} training not yet completed.\n'
+                     'Run train-all-models.sh to generate results.',
+                     font_size=18, color=MED_GRAY)
+
+    _safe_add_image(slide, convergence_path,
+                    Inches(7.0), Inches(1.8), width=Inches(5.8))
+    return slide
+
+
 def create_presentation():
     prs = Presentation()
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
 
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE 1 — Title
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank
-    _set_slide_bg(slide, DARK_BG)
-
+    # ══════════════════════════════════════════════════════════════════
+    # 1 — Title
+    # ══════════════════════════════════════════════════════════════════
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_slide_bg(slide, WHITE)
     _add_textbox(slide, Inches(1), Inches(1.5), Inches(11), Inches(1.2),
                  'Airborne Fire Detection with Machine Learning',
-                 font_size=44, color=WHITE, bold=True,
+                 font_size=44, color=DARK_TEXT, bold=True,
                  alignment=PP_ALIGN.CENTER)
     _add_textbox(slide, Inches(1), Inches(3.0), Inches(11), Inches(0.8),
                  'MASTER Hyperspectral Sensor  |  FireSense 2023 Campaign',
@@ -118,776 +223,511 @@ def create_presentation():
                  alignment=PP_ALIGN.CENTER)
     _add_textbox(slide, Inches(1), Inches(4.2), Inches(11), Inches(0.6),
                  'Multi-Layer Perceptron & Tabular Prior-Fitted Networks (TabPFN)',
-                 font_size=20, color=LIGHT_GRAY,
-                 alignment=PP_ALIGN.CENTER)
+                 font_size=20, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
     _add_textbox(slide, Inches(1), Inches(5.8), Inches(11), Inches(0.5),
-                 'Kaibab Plateau, Arizona  |  October 18-20, 2023',
-                 font_size=16, color=MED_GRAY,
-                 alignment=PP_ALIGN.CENTER)
+                 'Kaibab Plateau, Arizona  |  October 18\u201320, 2023',
+                 font_size=16, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
 
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE 2 — Problem Statement
-    # ════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════
+    # 2 — Problem Statement
+    # ══════════════════════════════════════════════════════════════════
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_slide_bg(slide, WHITE)
     _add_title_bar(slide, 'Problem Statement')
-
     _add_bullet_frame(slide, Inches(0.8), Inches(1.8), Inches(5.5), Inches(4.5), [
         'Detect active fire and burn scars from airborne '
         'hyperspectral imagery during prescribed burns',
-        'Traditional threshold-based detectors suffer from false positives '
-        '(sun glint, hot bare soil) and false negatives (smoldering edges)',
-        'Need a robust, automated method that generalizes across '
-        'day/night conditions and multiple flight passes',
+        'Traditional threshold detectors suffer from false positives '
+        '(sun glint, hot soil) and false negatives (smoldering edges)',
         'Goal: reduce error rate (FP + FN) / P while maintaining '
         'near-perfect recall on true fire pixels',
     ], font_size=18, color=DARK_TEXT, spacing=Pt(12))
-
-    # Right column — key numbers
     _add_textbox(slide, Inches(7.2), Inches(1.8), Inches(5), Inches(0.5),
                  'Key Challenges', font_size=22, color=ACCENT_RED, bold=True)
     _add_bullet_frame(slide, Inches(7.2), Inches(2.5), Inches(5), Inches(4), [
         'Extreme class imbalance: ~1.7% of pixels are fire',
         'Day/night radiometric differences',
         'SWIR saturation near flame front',
-        'Pre-burn flight has zero true fire — all detections are FP',
+        'Pre-burn flight has zero fire \u2014 all detections are FP',
     ], font_size=16, color=DARK_TEXT, spacing=Pt(10))
 
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE 3 — MASTER Instrument
-    # ════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════
+    # 3 — MASTER Instrument & Dataset
+    # ══════════════════════════════════════════════════════════════════
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'The MASTER Instrument')
-    _add_subtitle(slide, 'MODIS/ASTER Airborne Simulator — 50 Spectral Channels')
+    _add_title_bar(slide, 'MASTER Instrument & FireSense 2023 Dataset')
+    _add_subtitle(slide, '50-channel airborne whisk-broom scanner  |  Prescribed burn, Kaibab Plateau')
 
-    _add_bullet_frame(slide, Inches(0.8), Inches(2.0), Inches(5.8), Inches(4.5), [
-        'Airborne whisk-broom scanner on NASA ER-2 / Twin Otter',
-        '50 channels spanning 0.4 - 13 \u03bcm (VNIR, SWIR, MWIR, TIR)',
-        'Spatial resolution: ~5-50 m depending on altitude',
-        'High spectral resolution enables physics-based fire detection',
-    ], font_size=18, color=DARK_TEXT, spacing=Pt(10))
-
-    # Channel table
-    _add_textbox(slide, Inches(7.0), Inches(2.0), Inches(5.5), Inches(0.5),
-                 'Key Channels for Fire Detection',
-                 font_size=20, color=ACCENT_BLUE, bold=True)
-    rows = [
-        ('Band', 'Channel', 'Wavelength', 'Use'),
-        ('T4', 'Ch 31', '3.903 \u03bcm', 'Fire detection (MWIR peak)'),
-        ('T11', 'Ch 48', '11.327 \u03bcm', 'Background temperature'),
-        ('SWIR', 'Ch 22', '2.162 \u03bcm', 'Solar reflection / false alarm'),
-        ('Red', 'Ch 5', '0.654 \u03bcm', 'NDVI (vegetation health)'),
-        ('NIR', 'Ch 9', '0.866 \u03bcm', 'NDVI (vegetation health)'),
+    ch_rows = [
+        ('Band', 'Channel', '\u03bb', 'Use'),
+        ('T4', 'Ch 31', '3.9 \u03bcm', 'Fire detection (MWIR)'),
+        ('T11', 'Ch 48', '11.3 \u03bcm', 'Background temp'),
+        ('SWIR', 'Ch 22', '2.2 \u03bcm', 'Solar reflection'),
+        ('Red', 'Ch 5', '0.65 \u03bcm', 'NDVI'),
+        ('NIR', 'Ch 9', '0.87 \u03bcm', 'NDVI'),
     ]
-    tbl = slide.shapes.add_table(len(rows), 4,
-                                 Inches(7.0), Inches(2.7),
-                                 Inches(5.5), Inches(2.5)).table
-    for ri, row in enumerate(rows):
-        for ci, val in enumerate(row):
-            cell = tbl.cell(ri, ci)
-            cell.text = val
-            for p in cell.text_frame.paragraphs:
-                p.font.size = Pt(14)
-                p.font.name = 'Calibri'
-                if ri == 0:
-                    p.font.bold = True
-                    p.font.color.rgb = WHITE
-                else:
-                    p.font.color.rgb = DARK_TEXT
-            if ri == 0:
-                cell.fill.solid()
-                cell.fill.fore_color.rgb = DARK_BG
+    _make_table(slide, ch_rows, Inches(0.5), Inches(2.0),
+                Inches(5.0), Inches(3.0), col_widths=[1.0, 1.0, 1.0, 2.0])
 
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE 4 — Dataset & Flights
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'FireSense 2023 — Dataset & Flights')
-    _add_subtitle(slide, 'Prescribed burn on the Kaibab Plateau, Arizona')
-
-    flights = [
-        ('Flight', 'Date', 'Files', 'Condition', 'Fire Present'),
-        ('24-801-03', 'Oct 18', '14', 'Pre-burn (daytime)', 'No'),
-        ('24-801-04', 'Oct 19', '22', 'Active fire (night)', 'Yes'),
-        ('24-801-05', 'Oct 19', '12', 'Overnight (night)', 'Yes'),
-        ('24-801-06', 'Oct 20', '13', 'Smoldering (day)', 'Yes'),
+    fl_rows = [
+        ('Flight', 'Date', 'Sweeps', 'Condition', 'Fire?'),
+        ('03', 'Oct 18', '14', 'Pre-burn (day)', 'No'),
+        ('04', 'Oct 19', '22', 'Active fire (night)', 'Yes'),
+        ('05', 'Oct 19', '12', 'Overnight (night)', 'Yes'),
+        ('06', 'Oct 20', '13', 'Smoldering (day)', 'Yes'),
     ]
-    tbl = slide.shapes.add_table(len(flights), 5,
-                                 Inches(0.8), Inches(2.0),
-                                 Inches(8.0), Inches(2.5)).table
-    for ri, row in enumerate(flights):
-        for ci, val in enumerate(row):
-            cell = tbl.cell(ri, ci)
-            cell.text = val
-            for p in cell.text_frame.paragraphs:
-                p.font.size = Pt(16)
-                p.font.name = 'Calibri'
-                if ri == 0:
-                    p.font.bold = True
-                    p.font.color.rgb = WHITE
-                else:
-                    p.font.color.rgb = DARK_TEXT
-            if ri == 0:
-                cell.fill.solid()
-                cell.fill.fore_color.rgb = DARK_BG
-            elif ri % 2 == 0:
-                cell.fill.solid()
-                cell.fill.fore_color.rgb = VERY_LIGHT
+    _make_table(slide, fl_rows, Inches(6.0), Inches(2.0),
+                Inches(6.8), Inches(3.0), col_widths=[1.0, 1.2, 1.2, 2.2, 1.2])
 
-    _add_bullet_frame(slide, Inches(0.8), Inches(5.0), Inches(11), Inches(2), [
-        '61 HDF files total across 4 flights, covering pre-burn baseline through post-burn smoldering',
-        'Each HDF file = one scan sweep with 50 spectral channels + lat/lon geolocation',
+    _add_bullet_frame(slide, Inches(0.8), Inches(5.5), Inches(11), Inches(1.5), [
+        '61 HDF files across 4 flights  |  Each file = one scan sweep (50 channels + lat/lon)',
+        'Spatial resolution: ~8 m native pixels \u2192 gridded to 0.00025\u00b0 (\u224828 m)',
     ], font_size=16, color=DARK_TEXT, spacing=Pt(8))
 
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE 5 — Grid Resolution
-    # ════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════
+    # 4 — Data Processing: Grid + Multi-Pass + Pipeline
+    # ══════════════════════════════════════════════════════════════════
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'Grid Resolution & Spatial Resampling')
-    _add_subtitle(slide, 'Why we grid: from irregular scan pixels to a regular mosaic')
-
-    _add_bullet_frame(slide, Inches(0.8), Inches(2.0), Inches(5.8), Inches(2.2), [
-        'Native MASTER pixel spacing: ~8 m (whisk-broom scan geometry)',
-        'Grid resolution: GRID_RES = 0.00025\u00b0 \u2248 28 m at 36\u00b0N',
-        'This is a ~3\u00d7 downsampling from native resolution',
-        'Each sweep has irregular pixel layout; gridding enables multi-pass stacking',
-    ], font_size=18, color=DARK_TEXT, spacing=Pt(10))
-
-    _add_textbox(slide, Inches(7.0), Inches(2.0), Inches(5.5), Inches(0.5),
-                 'Why Grid Resolution Matters', font_size=20,
-                 color=ACCENT_RED, bold=True)
-    _add_bullet_frame(slide, Inches(7.0), Inches(2.7), Inches(5.5), Inches(2.0), [
-        'Enables multi-pass consistency filter (same grid cell, multiple sweeps)',
-        'Aggregates ~3 raw pixels per cell \u2192 noise reduction',
-        'Running accumulators: T4_max, dT_max, obs_count per cell',
-        'Trades spatial resolution for temporal depth and compute speed',
-    ], font_size=16, color=DARK_TEXT, spacing=Pt(10))
-
-    # Add grid resolution comparison image
-    added = _safe_add_image(slide, 'plots/grid_resolution_comparison.png',
-                            Inches(0.8), Inches(4.8), width=Inches(11.5))
-    if not added:
-        _add_textbox(slide, Inches(1), Inches(5.5), Inches(11), Inches(0.5),
-                     '[Run plot_grid_resolution.py to generate comparison image]',
-                     font_size=16, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE 6 — Grid Resolution Zoom
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'Grid Resolution — Pixel-to-Cell Mapping')
-    _add_subtitle(slide, 'How multiple raw pixels map into a single grid cell')
-
-    # Add zoom image
-    added = _safe_add_image(slide, 'plots/grid_resolution_zoom.png',
-                            Inches(0.5), Inches(1.8), width=Inches(12))
-    if not added:
-        _add_textbox(slide, Inches(1), Inches(3.5), Inches(11), Inches(0.5),
-                     '[Run plot_grid_resolution.py to generate zoom image]',
-                     font_size=16, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
-
-    _add_bullet_frame(slide, Inches(0.8), Inches(5.8), Inches(11), Inches(1.5), [
-        'Row index: (lat_max \u2212 lat) / GRID_RES  |  Col index: (lon \u2212 lon_min) / GRID_RES',
-        'Multiple raw pixels landing in the same cell: last observation writes T4/T11, '
-        'but running accumulators track max, sum, and count across all sweeps',
-        'Single sweep: ~1 pixel/cell  |  After 40 sweeps (Flight 04): up to 40 observations/cell',
-    ], font_size=16, color=DARK_TEXT, spacing=Pt(8))
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE 7 — Fire Detection Physics
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'Fire Detection — Physics')
-    _add_subtitle(slide, "Planck's Law & Brightness Temperature")
-
-    _add_bullet_frame(slide, Inches(0.8), Inches(2.0), Inches(5.8), Inches(4.5), [
-        'Fire at ~800 K is 23,000\u00d7 brighter than 300 K background at 3.9 \u03bcm (T4)',
-        'At 11.3 \u03bcm (T11), fire is only ~6\u00d7 brighter — \u0394T = T4 - T11 is key discriminator',
-        'Planck radiance: B(\u03bb,T) = (2hc\u00b2/\u03bb\u2075) / (exp(hc/\u03bbkT) - 1)',
-        'Brightness temperature inverts Planck equation to get equivalent blackbody T',
-    ], font_size=18, color=DARK_TEXT, spacing=Pt(12))
-
-    _add_textbox(slide, Inches(7.2), Inches(2.0), Inches(5.5), Inches(0.5),
-                 'Threshold Detection Rules', font_size=20,
-                 color=ACCENT_RED, bold=True)
-    _add_bullet_frame(slide, Inches(7.2), Inches(2.7), Inches(5.5), Inches(4.0), [
-        'Simple: T4 > 325 K AND \u0394T > 10 K',
-        'Contextual: pixel T4 > mean + 3\u03c3 of 61\u00d761 neighborhood',
-        'SWIR rejection: if radiance in 2.2 \u03bcm band is high, '
-        'likely solar reflection not fire',
-        'Multi-pass consistency: require fire in \u22652 passes '
-        '(52% FP reduction on pre-burn flight)',
-    ], font_size=16, color=DARK_TEXT, spacing=Pt(10))
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE — T4-T11 Threshold Explanation (diagram)
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _safe_add_image(slide, 'plots/diagram_threshold_explanation.png',
-                    Inches(0), Inches(0), width=Inches(13.333))
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE — Vegetation Loss Confirmation
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'Vegetation-Loss Fire Confirmation')
-    _add_subtitle(slide, 'NDVI tracking for burn scar verification')
-
-    _add_bullet_frame(slide, Inches(0.8), Inches(2.0), Inches(5.8), Inches(4.5), [
-        'NDVI = (NIR - Red) / (NIR + Red) — measures vegetation health',
-        'Baseline NDVI captured from first valid daytime pass (write-once per pixel)',
-        'Fire confirmed when NDVI drops \u22650.15 from baseline at a thermal-fire pixel',
-        'Nighttime fire with existing daytime baseline directly confirms vegetation loss',
-        'Confirmed pixels override best-illuminated compositing rule '
-        '— ensures burn scars remain visible',
-    ], font_size=18, color=DARK_TEXT, spacing=Pt(12))
-
-    _add_textbox(slide, Inches(7.2), Inches(2.0), Inches(5.5), Inches(0.5),
-                 'Why This Matters', font_size=20, color=ACCENT_BLUE, bold=True)
-    _add_bullet_frame(slide, Inches(7.2), Inches(2.7), Inches(5.5), Inches(3.5), [
-        'Reduces false positives from transient heat sources',
-        'Physical confirmation: fire should destroy vegetation',
-        'Provides temporal evidence — links thermal anomaly to actual burn',
-        'VEG_LOSS_THRESHOLD = 0.15 (configurable in lib/constants.py)',
-    ], font_size=16, color=DARK_TEXT, spacing=Pt(10))
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE — How the Data is Organized (diagram)
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _safe_add_image(slide, 'plots/diagram_dataset_organization.png',
-                    Inches(0), Inches(0), width=Inches(13.333))
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE — What Goes In, What Comes Out (diagram)
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _safe_add_image(slide, 'plots/diagram_model_io.png',
-                    Inches(0), Inches(0), width=Inches(13.333))
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE — MLP Architecture (diagram)
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _safe_add_image(slide, 'plots/diagram_mlp_architecture.png',
-                    Inches(0), Inches(0), width=Inches(13.333))
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE — Loss Functions for Fire Detection
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'Loss Functions for Fire Detection')
-    _add_subtitle(slide, 'Two approaches: pixel-weighted BCE vs direct error-rate optimization')
-
-    # Left column — Weighted BCE
-    _add_textbox(slide, Inches(0.5), Inches(2.0), Inches(5.5), Inches(0.5),
-                 'Weighted Binary Cross-Entropy', font_size=22,
-                 color=DARK_TEXT, bold=True)
-    _add_bullet_frame(slide, Inches(0.5), Inches(2.6), Inches(5.5), Inches(4.0), [
-        'L = (1/N) \u00d7 \u03a3 w\u1d62 \u00b7 BCE(p\u1d62, y\u1d62)',
-        'w\u1d62 = importance \u00d7 (N / category_count)',
-        'Weights normalized to mean = 1',
-        '',
-        'Categories & importance:',
-        '  Ground-truth flight: 10\u00d7',
-        '  Fire pixels: 5\u00d7',
-        '  Other pixels: 1\u00d7',
-        '',
-        '\u2705 Stable gradients, per-pixel signal',
-        '\u274c Indirectly optimizes error rate',
-    ], font_size=14, color=DARK_TEXT)
-
-    # Right column — SoftErrorRateLoss
-    _add_textbox(slide, Inches(7.0), Inches(2.0), Inches(5.5), Inches(0.5),
-                 'SoftErrorRateLoss', font_size=22,
-                 color=DARK_TEXT, bold=True)
-    _add_bullet_frame(slide, Inches(7.0), Inches(2.6), Inches(5.5), Inches(4.0), [
-        'L = (soft_FN + soft_FP) / P',
-        'soft_FP = \u03a3( p \u00b7 (1 \u2212 y) )',
-        'soft_FN = \u03a3( (1 \u2212 p) \u00b7 y )',
-        'P = total actual fire pixels',
-        '',
-        'True negatives do NOT appear in loss',
-        '\u2192 Class imbalance handled naturally',
-        '',
-        '\u2705 Directly minimizes (FN+FP)/P',
-        '\u2705 Best model uses this loss',
-        '\u274c Less stable early in training',
-    ], font_size=14, color=DARK_TEXT)
-
-    # Bottom callout — Evaluation
-    shape = slide.shapes.add_shape(
-        MSO_SHAPE.ROUNDED_RECTANGLE, Inches(1.5), Inches(6.5),
-        Inches(10.3), Inches(0.8))
-    shape.fill.solid()
-    shape.fill.fore_color.rgb = DARK_BG
-    shape.line.fill.background()
-    _add_textbox(slide, Inches(1.8), Inches(6.55), Inches(9.5), Inches(0.7),
-                 'Evaluation metric:  error_rate = (FN + FP) / P,  '
-                 'where P = total actual fire pixels   |   '
-                 'Best model uses SoftErrorRateLoss',
-                 font_size=16, color=WHITE, bold=True,
-                 alignment=PP_ALIGN.CENTER)
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE — MLP Hyperparameter Grid Search
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'MLP Hyperparameter Grid Search')
-    _add_subtitle(slide, '49 runs: 2 losses \u00d7 4 architectures \u00d7 3 learning rates '
-                         '(\u00d7 3 weight configs for BCE)')
-
-    # Search space table
-    search_rows = [
-        ('Parameter', 'Values Tested'),
-        ('Loss Function', 'Weighted BCE,  SoftErrorRateLoss'),
-        ('Architecture', '[64, 32],  [64, 64, 64, 32],  [128, 64, 32],  [128, 128, 128, 64]'),
-        ('Learning Rate', '0.01,  0.001,  0.0001'),
-        ('Importance Weights\n(BCE only)', 'gt=10/fire=5/other=1  (default)\n'
-                                           'gt=15/fire=3/other=1  (heavy FP penalty)\n'
-                                           'gt=5/fire=10/other=1  (heavy FN penalty)'),
-    ]
-    tbl = slide.shapes.add_table(len(search_rows), 2,
-                                 Inches(0.5), Inches(2.0),
-                                 Inches(7.5), Inches(3.5)).table
-    tbl.columns[0].width = Inches(2.5)
-    tbl.columns[1].width = Inches(5.0)
-    for ri, (k, v) in enumerate(search_rows):
-        for ci, val in enumerate((k, v)):
-            cell = tbl.cell(ri, ci)
-            cell.text = val
-            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
-            for p in cell.text_frame.paragraphs:
-                p.font.size = Pt(14)
-                p.font.name = 'Calibri'
-                if ri == 0:
-                    p.font.bold = True
-                    p.font.color.rgb = WHITE
-                else:
-                    p.font.color.rgb = DARK_TEXT
-                    if ci == 0:
-                        p.font.bold = True
-            if ri == 0:
-                cell.fill.solid()
-                cell.fill.fore_color.rgb = DARK_BG
-            elif ri % 2 == 0:
-                cell.fill.solid()
-                cell.fill.fore_color.rgb = VERY_LIGHT
-
-    # Best model callout box
-    shape = slide.shapes.add_shape(
-        MSO_SHAPE.ROUNDED_RECTANGLE, Inches(8.5), Inches(2.0),
-        Inches(4.3), Inches(4.5))
-    shape.fill.solid()
-    shape.fill.fore_color.rgb = RGBColor(0xE8, 0xF5, 0xE9)
-    shape.line.color.rgb = RGBColor(0x2E, 0x7D, 0x32)
-    shape.line.width = Pt(2)
-
-    _add_textbox(slide, Inches(8.8), Inches(2.1), Inches(3.8), Inches(0.5),
-                 '\u2b50 Best Model: Run 37', font_size=20,
-                 color=RGBColor(0x2E, 0x7D, 0x32), bold=True)
-    _add_bullet_frame(slide, Inches(8.8), Inches(2.7), Inches(3.8), Inches(3.5), [
-        'Loss: SoftErrorRateLoss',
-        'Architecture: 12 \u2192 64 \u2192 32 \u2192 1',
-        'Learning Rate: 0.01',
-        'Parameters: 2,945',
-        'Size: ~12 KB',
-        '',
-        'Error Rate: 0.031',
-        'TP: 9,009   FP: 221',
-        'FN: 59       TN: 519,558',
-        'Precision: 0.976',
-        'Recall: 0.993',
-    ], font_size=14, color=DARK_TEXT)
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE 9 — MLP Results
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'MLP Results — Best Model')
-    _add_subtitle(slide, 'Run 37: SoftErrorRateLoss | [64, 32] | lr=0.01')
-
-    # Results table
-    metrics = [
-        ('Metric', 'Value'),
-        ('Error Rate', '0.0309  (= (FP + FN) / P)'),
-        ('True Positives (TP)', '9,009'),
-        ('False Positives (FP)', '221'),
-        ('False Negatives (FN)', '59'),
-        ('True Negatives (TN)', '519,558'),
-        ('Precision', '0.9761'),
-        ('Recall', '0.9935'),
-        ('Architecture', '12 \u2192 64 \u2192 32 \u2192 1'),
-    ]
-    tbl = slide.shapes.add_table(len(metrics), 2,
-                                 Inches(0.8), Inches(2.0),
-                                 Inches(5.5), Inches(4.0)).table
-    tbl.columns[0].width = Inches(2.8)
-    tbl.columns[1].width = Inches(2.7)
-    for ri, (k, v) in enumerate(metrics):
-        for ci, val in enumerate((k, v)):
-            cell = tbl.cell(ri, ci)
-            cell.text = val
-            for p in cell.text_frame.paragraphs:
-                p.font.size = Pt(16)
-                p.font.name = 'Calibri'
-                if ri == 0:
-                    p.font.bold = True
-                    p.font.color.rgb = WHITE
-                else:
-                    p.font.color.rgb = DARK_TEXT
-                    if ci == 0:
-                        p.font.bold = True
-            if ri == 0:
-                cell.fill.solid()
-                cell.fill.fore_color.rgb = DARK_BG
-            elif ri % 2 == 0:
-                cell.fill.solid()
-                cell.fill.fore_color.rgb = VERY_LIGHT
-
-    # Add convergence plot if available
-    _safe_add_image(slide, 'plots/convergence_mlp.png',
-                    Inches(7.0), Inches(1.8), width=Inches(5.8))
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE 10 — MLP Prediction Maps
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'MLP — Spatial Prediction Maps')
-    _add_subtitle(slide, 'Flight 24-801-06 (daytime smoldering)')
-
-    added = _safe_add_image(slide, 'plots/tune_prediction_map_2480106.png',
-                            Inches(1.5), Inches(1.8), width=Inches(10))
-    if not added:
-        _add_textbox(slide, Inches(2), Inches(3.5), Inches(9), Inches(1),
-                     '[Prediction map will be generated after training — '
-                     'plots/tune_prediction_map_2480106.png]',
-                     font_size=18, color=MED_GRAY,
-                     alignment=PP_ALIGN.CENTER)
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE 11 — MLP Probability Distribution
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'MLP — Probability Calibration')
-    _add_subtitle(slide, 'P(fire) distribution for fire vs non-fire pixels')
-
-    added = _safe_add_image(slide, 'plots/tune_probability_hist.png',
-                            Inches(3), Inches(1.8), width=Inches(7))
-    if not added:
-        _add_textbox(slide, Inches(2), Inches(3.5), Inches(9), Inches(1),
-                     '[Probability histogram will be generated after training — '
-                     'plots/tune_probability_hist.png]',
-                     font_size=18, color=MED_GRAY,
-                     alignment=PP_ALIGN.CENTER)
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE — TabPFN Architecture (diagram)
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _safe_add_image(slide, 'plots/diagram_tabpfn_architecture.png',
-                    Inches(0), Inches(0), width=Inches(13.333))
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE — TabPFN Results (placeholder with convergence if available)
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'TabPFN Results')
-    _add_subtitle(slide, 'Classification & Regression — pending training completion')
-
-    added_cls = _safe_add_image(slide, 'plots/convergence_tabpfn_classification.png',
-                                Inches(0.3), Inches(2.0), width=Inches(6.2))
-    added_reg = _safe_add_image(slide, 'plots/convergence_tabpfn_regression.png',
-                                Inches(6.8), Inches(2.0), width=Inches(6.2))
-    if not (added_cls or added_reg):
-        _add_textbox(slide, Inches(1), Inches(3.5), Inches(11), Inches(1),
-                     'TabPFN training has not been completed yet.\n'
-                     'Run train-all-models.sh to generate results and convergence plots.',
-                     font_size=18, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE — Model Comparison (diagram)
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _safe_add_image(slide, 'plots/diagram_model_comparison.png',
-                    Inches(0), Inches(0), width=Inches(13.333))
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE 15 — Pipeline Architecture
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'Processing Pipeline')
-    _add_subtitle(slide, 'From raw HDF to fire detection')
+    _add_title_bar(slide, 'Data Processing Pipeline')
+    _add_subtitle(slide, 'From raw HDF scans to ML-ready features via multi-pass gridding')
 
     steps = [
-        ('1. Ingest', 'Read MASTER L1B\nHDF files\n(50 channels)'),
-        ('2. Calibrate', 'Planck inversion\n\u2192 Brightness\nTemperature'),
-        ('3. Grid', 'Mosaic sweeps\nonto lat/lon\ngrid'),
-        ('4. Features', 'Compute 12\naggregate\nfeatures'),
-        ('5. Detect', 'ML inference\nor threshold\nrules'),
-        ('6. Validate', 'Multi-pass\n+ Veg-loss\nconfirmation'),
+        ('1. Ingest', 'Read MASTER\nHDF files\n(50 ch)'),
+        ('2. Calibrate', 'Planck \u2192\nBrightness\nTemp'),
+        ('3. Grid', 'Mosaic onto\nlat/lon grid\n(0.00025\u00b0)'),
+        ('4. Accumulate', 'Multi-pass:\nT4_max, dT_max\nobs_count'),
+        ('5. Features', '12 aggregate\nfeatures per\ngrid cell'),
+        ('6. Detect', 'ML inference\nor threshold\nrules'),
     ]
-    box_w = Inches(1.8)
-    box_h = Inches(2.0)
-    start_x = Inches(0.5)
-    y = Inches(2.5)
-    gap = Inches(0.3)
+    box_w, box_h = Inches(1.8), Inches(1.8)
+    start_x, y = Inches(0.4), Inches(2.2)
+    gap = Inches(0.25)
     for i, (title, body) in enumerate(steps):
         x = start_x + i * (box_w + gap)
+        color = ACCENT_RED if i == 5 else DARK_BG
         shape = slide.shapes.add_shape(
             MSO_SHAPE.ROUNDED_RECTANGLE, x, y, box_w, box_h)
         shape.fill.solid()
-        if i == 4:  # Detect step highlighted
-            shape.fill.fore_color.rgb = ACCENT_RED
-            text_color = WHITE
-        else:
-            shape.fill.fore_color.rgb = DARK_BG
-            text_color = WHITE
+        shape.fill.fore_color.rgb = color
         shape.line.fill.background()
-
         tf = shape.text_frame
         tf.word_wrap = True
         tf.paragraphs[0].alignment = PP_ALIGN.CENTER
         p = tf.paragraphs[0]
         p.text = title
-        p.font.size = Pt(16)
+        p.font.size = Pt(14)
         p.font.bold = True
-        p.font.color.rgb = text_color
-        p.font.name = 'Calibri'
-
+        p.font.color.rgb = WHITE
+        p.font.name = 'Aptos'
         p2 = tf.add_paragraph()
         p2.text = body
-        p2.font.size = Pt(12)
+        p2.font.size = Pt(11)
         p2.font.color.rgb = LIGHT_GRAY
-        p2.font.name = 'Calibri'
+        p2.font.name = 'Aptos'
         p2.alignment = PP_ALIGN.CENTER
-
-        # Arrow between boxes
         if i < len(steps) - 1:
-            arrow_x = x + box_w
-            arrow_y = y + box_h / 2
-            _add_textbox(slide, arrow_x, arrow_y - Inches(0.15),
+            _add_textbox(slide, x + box_w, y + box_h / 2 - Inches(0.15),
                          gap, Inches(0.3), '\u2192',
-                         font_size=24, color=ACCENT_ORANGE, bold=True,
+                         font_size=22, color=ACCENT_ORANGE, bold=True,
                          alignment=PP_ALIGN.CENTER)
 
-    _add_bullet_frame(slide, Inches(0.8), Inches(5.2), Inches(11), Inches(1.5), [
-        'Real-time simulation mode: process sweeps sequentially with '
-        'live matplotlib animation (realtime_fire.py)',
-        'All shared logic in lib/ package \u2014 scripts are thin orchestration wrappers',
+    _add_bullet_frame(slide, Inches(0.5), Inches(4.4), Inches(12), Inches(2.8), [
+        'Gridding: irregular whisk-broom pixels \u2192 regular lat/lon mosaic  |  '
+        '~3 raw pixels per cell',
+        'Multi-pass: same cell scanned 1\u201340\u00d7 across sweeps \u2192 '
+        'running accumulators track max, sum, count',
+        'Multi-pass consistency filter: require fire in \u22652 passes '
+        '(52% FP reduction on pre-burn flight)',
+        'Result: one row per grid cell with 12 features \u2192 ready for ML or threshold detection',
     ], font_size=16, color=DARK_TEXT, spacing=Pt(8))
 
-    # ════════════════════════════════════════════════════════════════════
-    # Real-Time Simulation — Pre-Burn (Daytime)
-    # ════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════
+    # 5 — Multi-Pass Scanning (diagram)
+    # ══════════════════════════════════════════════════════════════════
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'Real-Time Simulation — Pre-Burn Baseline')
-    _add_subtitle(slide, 'Flight 24-801-03: Daytime, no fire (9 sweeps)')
+    _center_image(slide, 'plots/diagram_multipass_scanning.png')
 
-    # Show first and last frame side by side
-    added_first = _safe_add_image(slide, 'plots/realtime/ml-2480103-001.png',
-                                  Inches(0.3), Inches(2.0), width=Inches(6.2))
-    added_last = _safe_add_image(slide, 'plots/realtime/ml-2480103-009.png',
-                                 Inches(6.8), Inches(2.0), width=Inches(6.2))
-    if not (added_first or added_last):
-        _add_textbox(slide, Inches(1), Inches(3.5), Inches(11), Inches(0.5),
-                     '[Run realtime_mlp.py to generate frames]',
-                     font_size=16, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
-    else:
-        _add_textbox(slide, Inches(0.3), Inches(5.8), Inches(6.2), Inches(0.4),
-                     'Sweep 1/9 — First sweep (NDVI baseline)',
-                     font_size=14, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
-        _add_textbox(slide, Inches(6.8), Inches(5.8), Inches(6.2), Inches(0.4),
-                     'Sweep 9/9 — Complete coverage, 0 fire pixels',
-                     font_size=14, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
+    # ══════════════════════════════════════════════════════════════════
+    # 6 — Baseline: T4-T11 Threshold + NDVI Vegetation
+    # ══════════════════════════════════════════════════════════════════
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_slide_bg(slide, WHITE)
+    _add_title_bar(slide, 'Baseline Detection: Physics + Vegetation')
+    _add_subtitle(slide, 'T4\u2013T11 threshold  |  NDVI vegetation-loss confirmation')
 
-    _add_bullet_frame(slide, Inches(0.8), Inches(6.3), Inches(11), Inches(1), [
-        'Pre-burn flight establishes NDVI vegetation baseline and confirms zero fire detections',
-        'GIF animation: plots/gifs/ml_2480103_pre-burn.gif',
+    _add_bullet_frame(slide, Inches(0.8), Inches(2.0), Inches(5.5), Inches(5), [
+        'Fire at ~800 K is 23,000\u00d7 brighter than 300 K background at 3.9 \u03bcm',
+        'Simple rule: T4 > 325 K AND \u0394T > 10 K',
+        'Contextual: T4 > mean + 3\u03c3 of 61\u00d761 neighborhood',
+        'SWIR rejection filters solar reflection false alarms',
+        '',
+        'Vegetation-loss confirmation:',
+        'NDVI baseline from first daytime pass (write-once)',
+        'Fire confirmed when NDVI drops \u22650.15 at thermal pixel',
+        'Confirmed pixels persist as burn scars',
+    ], font_size=16, color=DARK_TEXT, spacing=Pt(8))
+
+    _safe_add_image(slide, 'plots/diagram_threshold_explanation.png',
+                    Inches(6.5), Inches(1.8), width=Inches(6.5))
+
+    # ══════════════════════════════════════════════════════════════════
+    # 7 — ML Approach: MLP & TabPFN Overview
+    # ══════════════════════════════════════════════════════════════════
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_slide_bg(slide, WHITE)
+    _add_title_bar(slide, 'Machine Learning Approach')
+    _add_subtitle(slide, 'Two model families, same 12 input features, same output: P(fire) per grid cell')
+
+    _add_bullet_frame(slide, Inches(0.5), Inches(2.0), Inches(5.8), Inches(5), [
+        'Why ML?  Threshold rules miss smoldering edges, '
+        'produce FP on hot soil.  ML learns the boundary.',
+        '',
+        'FireMLP (Multi-Layer Perceptron):',
+        '  Trained from scratch on our data',
+        '  12 \u2192 64 \u2192 32 \u2192 1  |  2,945 params  |  ~12 KB',
+        '',
+        'TabPFN (Tabular Prior-Fitted Network):',
+        '  Pre-trained transformer for tabular data',
+        '  Fine-tuned on our fire features (20 epochs)',
+        '  7.2M params  |  ~83 MB  |  Built-in ensemble',
+    ], font_size=16, color=DARK_TEXT, spacing=Pt(6))
+
+    _safe_add_image(slide, 'plots/diagram_model_comparison.png',
+                    Inches(6.5), Inches(1.8), width=Inches(6.5))
+
+    # ══════════════════════════════════════════════════════════════════
+    # 8 — What Goes In / What Comes Out (diagram)
+    # ══════════════════════════════════════════════════════════════════
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_slide_bg(slide, WHITE)
+    _center_image(slide, 'plots/diagram_model_io.png')
+
+    # ══════════════════════════════════════════════════════════════════
+    # 9 — Loss Functions & Hyperparameter Tuning (all models)
+    # ══════════════════════════════════════════════════════════════════
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_slide_bg(slide, WHITE)
+    _add_title_bar(slide, 'Loss Functions & Hyperparameter Tuning')
+    _add_subtitle(slide, '97 total configurations: 49 MLP + 16 TabPFN-Cls + 32 TabPFN-Reg')
+
+    # MLP losses
+    _add_textbox(slide, Inches(0.3), Inches(2.0), Inches(4.2), Inches(0.5),
+                 'MLP (49 runs)', font_size=20, color=ACCENT_BLUE, bold=True)
+    _add_bullet_frame(slide, Inches(0.3), Inches(2.6), Inches(4.2), Inches(2.2), [
+        'Weighted BCE: importance \u00d7 inv-frequency',
+        'SoftErrorRateLoss: (soft_FN + soft_FP) / P',
+        '4 architectures \u00d7 3 LRs \u00d7 weight configs',
+    ], font_size=14, color=DARK_TEXT, spacing=Pt(6))
+
+    # TabPFN-Cls losses
+    _add_textbox(slide, Inches(4.7), Inches(2.0), Inches(4.2), Inches(0.5),
+                 'TabPFN Classification (16 runs)', font_size=20,
+                 color=RGBColor(0x7C, 0x3A, 0xED), bold=True)
+    _add_bullet_frame(slide, Inches(4.7), Inches(2.6), Inches(4.2), Inches(2.2), [
+        'Cross-Entropy Loss (binary)',
+        '2 LRs \u00d7 2 n_estimators \u00d7 2 WD \u00d7 2 GC',
+    ], font_size=14, color=DARK_TEXT, spacing=Pt(6))
+
+    # TabPFN-Reg losses
+    _add_textbox(slide, Inches(9.2), Inches(2.0), Inches(4), Inches(0.5),
+                 'TabPFN Regression (32 runs)', font_size=20,
+                 color=RGBColor(0x7C, 0x3A, 0xED), bold=True)
+    _add_bullet_frame(slide, Inches(9.2), Inches(2.6), Inches(4), Inches(2.2), [
+        'CRPS + optional MSE Loss',
+        'Same as Cls \u00d7 2 MSE weight options',
+    ], font_size=14, color=DARK_TEXT, spacing=Pt(6))
+
+    # Oversampling — shared strategy
+    _add_textbox(slide, Inches(0.3), Inches(4.9), Inches(12.5), Inches(0.4),
+                 'Handling Class Imbalance', font_size=18, color=ACCENT_RED, bold=True)
+    _add_bullet_frame(slide, Inches(0.3), Inches(5.4), Inches(12.5), Inches(1.0), [
+        'Only ~1.7% of grid cells contain fire \u2014 without correction, models learn to always predict "no fire"',
+        'Minority oversampling: fire locations are resampled to match no-fire count, balancing the training set',
+        'Pixel-wise weights (MLP): ground-truth flight \u00d710, fire pixels \u00d75, others \u00d71 \u2014 further emphasizes rare events',
     ], font_size=14, color=DARK_TEXT, spacing=Pt(4))
 
-    # ════════════════════════════════════════════════════════════════════
-    # Real-Time Simulation — Active Fire (Night)
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'Real-Time Simulation — Active Fire (Night)')
-    _add_subtitle(slide, 'Flight 24-801-04: 40 sweeps, fire grows over time')
-
-    added_first = _safe_add_image(slide, 'plots/realtime/ml-2480104-005.png',
-                                  Inches(0.3), Inches(2.0), width=Inches(6.2))
-    added_last = _safe_add_image(slide, 'plots/realtime/ml-2480104-040.png',
-                                 Inches(6.8), Inches(2.0), width=Inches(6.2))
-    if not (added_first or added_last):
-        _add_textbox(slide, Inches(1), Inches(3.5), Inches(11), Inches(0.5),
-                     '[Run realtime_mlp.py to generate frames]',
-                     font_size=16, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
-    else:
-        _add_textbox(slide, Inches(0.3), Inches(5.8), Inches(6.2), Inches(0.4),
-                     'Sweep 5/40 — Early fire detection',
-                     font_size=14, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
-        _add_textbox(slide, Inches(6.8), Inches(5.8), Inches(6.2), Inches(0.4),
-                     'Sweep 40/40 — Full fire extent with zone labels',
-                     font_size=14, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
-
-    _add_bullet_frame(slide, Inches(0.8), Inches(6.3), Inches(11), Inches(1), [
-        'Night flight with modified 3.9\u03bcm preamp — fire zones detected and labelled in real time',
-        'GIF animation: plots/gifs/ml_2480104_active.gif',
-    ], font_size=14, color=DARK_TEXT, spacing=Pt(4))
-
-    # ════════════════════════════════════════════════════════════════════
-    # Real-Time Simulation — Smoldering (Daytime)
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'Real-Time Simulation — Daytime Smoldering')
-    _add_subtitle(slide, 'Flight 24-801-06: Vegetation-confirmed burn scars (14 sweeps)')
-
-    added_first = _safe_add_image(slide, 'plots/realtime/ml-2480106-001.png',
-                                  Inches(0.3), Inches(2.0), width=Inches(6.2))
-    added_last = _safe_add_image(slide, 'plots/realtime/ml-2480106-014.png',
-                                 Inches(6.8), Inches(2.0), width=Inches(6.2))
-    if not (added_first or added_last):
-        _add_textbox(slide, Inches(1), Inches(3.5), Inches(11), Inches(0.5),
-                     '[Run realtime_mlp.py to generate frames]',
-                     font_size=16, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
-    else:
-        _add_textbox(slide, Inches(0.3), Inches(5.8), Inches(6.2), Inches(0.4),
-                     'Sweep 1/14 — Initial scan',
-                     font_size=14, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
-        _add_textbox(slide, Inches(6.8), Inches(5.8), Inches(6.2), Inches(0.4),
-                     'Sweep 14/14 — 7,483 fire px, 5,329 veg-confirmed, 463 ha',
-                     font_size=14, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
-
-    _add_bullet_frame(slide, Inches(0.8), Inches(6.3), Inches(11), Inches(1), [
-        'Daytime smoldering with NDVI vegetation-loss confirmation (magenta markers)',
-        'GIF animation: plots/gifs/ml_2480106_smoldering.gif',
-    ], font_size=14, color=DARK_TEXT, spacing=Pt(4))
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE — Simple vs ML Comparison: Active Fire
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'Threshold vs MLP — Active Fire (Flight 04)')
-    _add_subtitle(slide, 'Left: Simple threshold (T4>325K, dT>10K)  |  Right: MLP detector')
-
-    added = _safe_add_image(slide, 'plots/compare_final_2480104.png',
-                            Inches(0.2), Inches(1.8), width=Inches(12.8))
-    if added:
-        _add_bullet_frame(slide, Inches(0.8), Inches(6.0), Inches(11), Inches(1.2), [
-            'Simple: 3,603 fire px (223 ha)  |  MLP: 4,057 fire px (251 ha)',
-            'MLP detects more fire at edges and in smoldering regions — higher sensitivity',
-            'Side-by-side GIF: plots/gifs/compare_2480104_active.gif',
-        ], font_size=14, color=DARK_TEXT, spacing=Pt(4))
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE — Simple vs ML Comparison: Smoldering
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'Threshold vs MLP — Smoldering (Flight 06)')
-    _add_subtitle(slide, 'Left: Simple threshold  |  Right: MLP detector')
-
-    added = _safe_add_image(slide, 'plots/compare_final_2480106.png',
-                            Inches(0.2), Inches(1.8), width=Inches(12.8))
-    if added:
-        _add_bullet_frame(slide, Inches(0.8), Inches(6.0), Inches(11), Inches(1.2), [
-            'Simple: 6,903 fire px (428 ha)  |  MLP: 7,483 fire px (464 ha)',
-            'MLP captures additional smoldering pixels and low-intensity burn edges',
-            'Side-by-side GIF: plots/gifs/compare_2480106_smoldering.gif',
-        ], font_size=14, color=DARK_TEXT, spacing=Pt(4))
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE — Simple vs ML Comparison: Pre-burn
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'Threshold vs MLP — Pre-burn Baseline (Flight 03)')
-    _add_subtitle(slide, 'Left: Simple threshold  |  Right: MLP detector  |  No real fire present')
-
-    added = _safe_add_image(slide, 'plots/compare_final_2480103.png',
-                            Inches(0.2), Inches(1.8), width=Inches(12.8))
-    if added:
-        _add_bullet_frame(slide, Inches(0.8), Inches(6.0), Inches(11), Inches(1.2), [
-            'Simple: 70 false fire px (4.3 ha)  |  MLP: 128 false fire px (7.9 ha)',
-            'Both detectors show some false positives on pre-burn — hot bare soil and sun glint',
-            'Multi-pass consistency filter reduces these by 52%',
-        ], font_size=14, color=DARK_TEXT, spacing=Pt(4))
-
-    # ════════════════════════════════════════════════════════════════════
-    # Future Work
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'Future Work & Next Steps')
-
-    _add_bullet_frame(slide, Inches(0.8), Inches(2.0), Inches(5.8), Inches(4.5), [
-        'Complete TabPFN grid search and compare against MLP baseline',
-        'Ensemble methods: combine MLP + TabPFN predictions',
-        'Transfer learning: apply trained models to new fire campaigns',
-        'Temporal features: leverage sequential pass information',
-        'Operational deployment: integrate with real-time mosaic pipeline',
-    ], font_size=18, color=DARK_TEXT, spacing=Pt(12))
-
-    _add_textbox(slide, Inches(7.2), Inches(2.0), Inches(5.5), Inches(0.5),
-                 'Technical Improvements', font_size=20,
-                 color=ACCENT_BLUE, bold=True)
-    _add_bullet_frame(slide, Inches(7.2), Inches(2.7), Inches(5.5), Inches(3.5), [
-        'Explore deeper MLP architectures with dropout/batch norm',
-        'Investigate TabPFN with larger n_estimators',
-        'Add spatial context features (neighbor statistics)',
-        'Cross-validation across flights for robustness',
-    ], font_size=16, color=DARK_TEXT, spacing=Pt(10))
-
-    # ════════════════════════════════════════════════════════════════════
-    # SLIDE 17 — Summary / Thank You
-    # ════════════════════════════════════════════════════════════════════
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _set_slide_bg(slide, DARK_BG)
-
-    _add_textbox(slide, Inches(1), Inches(1.5), Inches(11), Inches(1),
-                 'Summary', font_size=40, color=WHITE, bold=True,
+    # Bottom callout
+    shape = slide.shapes.add_shape(
+        MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.5), Inches(6.5),
+        Inches(12.3), Inches(0.8))
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = DARK_BG
+    shape.line.fill.background()
+    _add_textbox(slide, Inches(0.8), Inches(6.55), Inches(11.8), Inches(0.7),
+                 'Evaluation metric:  error_rate = (FN + FP) / P  where P = actual fire pixels  |  '
+                 'All three models receive the SAME 12 aggregate features',
+                 font_size=14, color=WHITE, bold=False,
                  alignment=PP_ALIGN.CENTER)
 
+    # ══════════════════════════════════════════════════════════════════
+    # 10 — Reading the Real-Time Plots (legend)
+    # ══════════════════════════════════════════════════════════════════
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_slide_bg(slide, WHITE)
+    _center_image(slide, 'plots/diagram_realtime_legend.png')
+
+    # ══════════════════════════════════════════════════════════════════
+    # 11 — MLP Results — Best Model
+    # ══════════════════════════════════════════════════════════════════
+    _metrics_slide(prs,
+                   'MLP Results \u2014 Best Model',
+                   'SoftErrorRateLoss  |  [64, 32]  |  lr=0.01  |  2,945 params',
+                   'configs/best_model_mlp.yaml',
+                   'plots/convergence_mlp.png',
+                   'MLP')
+
+    # ══════════════════════════════════════════════════════════════════
+    # 12 — MLP vs Baseline: Pre-Burn (FP analysis)
+    # ══════════════════════════════════════════════════════════════════
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_slide_bg(slide, WHITE)
+    _add_title_bar(slide, 'MLP vs Baseline \u2014 Pre-Burn (Flight 03)')
+    _add_subtitle(slide, 'Best MLP: SoftErrorRateLoss | [64, 32] | lr=0.01')
+    _add_textbox(slide, Inches(0.6), Inches(1.85), Inches(12), Inches(0.4),
+                 'No real fire present \u2014 all detections are false positives.  '
+                 'MLP: 0 \u2192 53 \u2192 128 FP across 9 sweeps  |  '
+                 'Threshold: 0 \u2192 70 FP',
+                 font_size=16, color=ACCENT_RED, bold=False)
+    _gif_path = 'plots/gifs/compare_ml_vs_simple_2480103_pre-burn.gif'
+    added = _safe_add_image(slide, _gif_path,
+                            Inches(0.5), Inches(2.35), width=Inches(12.3))
+    if not added:
+        _add_textbox(slide, Inches(1), Inches(3.5), Inches(11), Inches(1),
+                     f'[Animation not found: {_gif_path}]',
+                     font_size=18, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
+
+    # ══════════════════════════════════════════════════════════════════
+    # 13 — MLP vs Baseline: Daytime Smoldering
+    # ══════════════════════════════════════════════════════════════════
+    _gif_slide(prs,
+               'MLP vs Baseline \u2014 Daytime Smoldering (Flight 06)',
+               'plots/gifs/compare_ml_vs_simple_2480106_smoldering.gif',
+               'Hardest detection scenario: low-intensity fire with veg-loss confirmation')
+
+    # ══════════════════════════════════════════════════════════════════
+    # 14 — TabPFN Classification Results
+    # ══════════════════════════════════════════════════════════════════
+    _metrics_slide(prs,
+                   'TabPFN Classification \u2014 Results',
+                   'Cross-Entropy Loss  |  Fine-tuned 20 epochs',
+                   'configs/best_model_tabpfn_classification.yaml',
+                   'plots/convergence_tabpfn_classification.png',
+                   'TabPFN Classification')
+
+    # ══════════════════════════════════════════════════════════════════
+    # 15 — TabPFN Cls vs Baseline: Pre-Burn
+    # ══════════════════════════════════════════════════════════════════
+    _gif_slide(prs,
+               'TabPFN Classification vs Baseline \u2014 Pre-Burn (Flight 03)',
+               'plots/gifs/compare_simple_vs_tabpfn_classification_2480103_pre-burn.gif',
+               'False positive comparison \u2014 no real fire present')
+
+    # ══════════════════════════════════════════════════════════════════
+    # 16 — TabPFN Cls vs Baseline: Smoldering
+    # ══════════════════════════════════════════════════════════════════
+    _gif_slide(prs,
+               'TabPFN Classification vs Baseline \u2014 Smoldering (Flight 06)',
+               'plots/gifs/compare_simple_vs_tabpfn_classification_2480106_smoldering.gif',
+               'Daytime smoldering with vegetation-loss confirmation')
+
+    # ══════════════════════════════════════════════════════════════════
+    # 17 — TabPFN Regression Results
+    # ══════════════════════════════════════════════════════════════════
+    _metrics_slide(prs,
+                   'TabPFN Regression \u2014 Results',
+                   'CRPS + MSE Loss  |  Fine-tuned 20 epochs',
+                   'configs/best_model_tabpfn_regression.yaml',
+                   'plots/convergence_tabpfn_regression.png',
+                   'TabPFN Regression')
+
+    # ══════════════════════════════════════════════════════════════════
+    # 18 — TabPFN Reg vs Baseline: Smoldering
+    # ══════════════════════════════════════════════════════════════════
+    _gif_slide(prs,
+               'TabPFN Regression vs Baseline \u2014 Smoldering (Flight 06)',
+               'plots/gifs/compare_simple_vs_tabpfn_regression_2480106_smoldering.gif',
+               'Continuous probability output thresholded at optimal cutoff')
+
+    # ══════════════════════════════════════════════════════════════════
+    # 19 — Model Comparison Summary
+    # ══════════════════════════════════════════════════════════════════
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_slide_bg(slide, WHITE)
+    _add_title_bar(slide, 'Model Comparison Summary')
+    _add_subtitle(slide, 'All models evaluated on same test set (4 flights)')
+
+    header = ['Model', 'Error Rate', 'TP', 'FP', 'FN', 'Precision', 'Recall']
+    model_rows = [header]
+
+    mlp_m = _load_yaml_metrics('configs/best_model_mlp.yaml')
+    if mlp_m:
+        model_rows.append([
+            'MLP', f'{mlp_m["error_rate"]:.4f}',
+            f'{mlp_m["TP"]:,}', f'{mlp_m["FP"]:,}', f'{mlp_m["FN"]:,}',
+            f'{mlp_m["precision"]:.4f}', f'{mlp_m["recall"]:.4f}'])
+
+    cls_m = _load_yaml_metrics('configs/best_model_tabpfn_classification.yaml')
+    if cls_m:
+        model_rows.append([
+            'TabPFN-Cls', f'{cls_m["error_rate"]:.4f}',
+            f'{cls_m["TP"]:,}', f'{cls_m["FP"]:,}', f'{cls_m["FN"]:,}',
+            f'{cls_m["precision"]:.4f}', f'{cls_m["recall"]:.4f}'])
+
+    reg_m = _load_yaml_metrics('configs/best_model_tabpfn_regression.yaml')
+    if reg_m:
+        model_rows.append([
+            'TabPFN-Reg', f'{reg_m["error_rate"]:.4f}',
+            f'{reg_m["TP"]:,}', f'{reg_m["FP"]:,}', f'{reg_m["FN"]:,}',
+            f'{reg_m["precision"]:.4f}', f'{reg_m["recall"]:.4f}'])
+
+    if len(model_rows) > 1:
+        _make_table(slide, model_rows,
+                    Inches(0.5), Inches(2.2), Inches(12.3), Inches(2.5),
+                    col_widths=[2.0, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5])
+    else:
+        _add_textbox(slide, Inches(1), Inches(3), Inches(11), Inches(1),
+                     'No model results available yet.  Run train-all-models.sh.',
+                     font_size=18, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
+
+    _add_bullet_frame(slide, Inches(0.8), Inches(5.2), Inches(11), Inches(2), [
+        'Error Rate = (FP + FN) / P  where P = actual fire pixels  |  Lower is better',
+        'All models use the same 12 aggregate features from multi-pass gridding',
+        '97 hyperparameter configurations tested across all three model families',
+    ], font_size=16, color=DARK_TEXT, spacing=Pt(8))
+
+    # ══════════════════════════════════════════════════════════════════
+    # 20 — Conclusion + Future Work
+    # ══════════════════════════════════════════════════════════════════
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_slide_bg(slide, WHITE)
+    _add_title_bar(slide, 'Conclusion & Future Work')
+
+    # Best model callout
+    shape = slide.shapes.add_shape(
+        MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.5), Inches(2.0),
+        Inches(6), Inches(3.0))
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = GREEN_BG
+    shape.line.color.rgb = GREEN
+    shape.line.width = Pt(2)
+
+    if mlp_m:
+        _add_textbox(slide, Inches(0.8), Inches(2.1), Inches(5.4), Inches(0.5),
+                     '\u2b50 Best Model: MLP (SoftErrorRateLoss)',
+                     font_size=20, color=GREEN, bold=True)
+        _add_bullet_frame(slide, Inches(0.8), Inches(2.7), Inches(5.4), Inches(2), [
+            f'Error Rate: {mlp_m["error_rate"]:.4f}  |  '
+            f'Recall: {mlp_m["recall"]:.4f}',
+            f'TP: {mlp_m["TP"]:,}  |  FP: {mlp_m["FP"]:,}  |  FN: {mlp_m["FN"]:,}',
+            'Compact 2-layer network (12 KB) trains in seconds',
+        ], font_size=14, color=DARK_TEXT, spacing=Pt(6))
+
+    # Future work
+    _add_textbox(slide, Inches(7.0), Inches(2.0), Inches(5.5), Inches(0.5),
+                 'Next Steps', font_size=22, color=ACCENT_BLUE, bold=True)
+    _add_bullet_frame(slide, Inches(7.0), Inches(2.7), Inches(5.5), Inches(4.5), [
+        'Ensemble: combine MLP + TabPFN predictions',
+        'Transfer learning to new fire campaigns',
+        'Spatial context features (neighbor stats)',
+        'Temporal features from sequential passes',
+        'Operational deployment in real-time pipeline',
+        'Cross-validation across flights',
+    ], font_size=16, color=DARK_TEXT, spacing=Pt(8))
+
+    # ══════════════════════════════════════════════════════════════════
+    # 21 — Summary
+    # ══════════════════════════════════════════════════════════════════
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_slide_bg(slide, WHITE)
+    _add_textbox(slide, Inches(1), Inches(1.5), Inches(11), Inches(1),
+                 'Summary', font_size=40, color=DARK_TEXT, bold=True,
+                 alignment=PP_ALIGN.CENTER)
     _add_bullet_frame(slide, Inches(2), Inches(3.0), Inches(9), Inches(3.5), [
         'Physics-based fire detection from 50-channel MASTER hyperspectral data',
         'Multi-pass consistency + vegetation-loss confirmation reduce false positives',
         'FireMLP achieves 0.031 error rate with 99.4% recall on test set',
         'TabPFN offers meta-learned alternative with minimal hyperparameter tuning',
-        'Modular Python pipeline supports real-time simulation and batch processing',
-    ], font_size=20, color=WHITE, spacing=Pt(14))
-
+        '97 configurations tested across MLP, TabPFN-Cls, and TabPFN-Reg',
+    ], font_size=20, color=DARK_TEXT, spacing=Pt(14))
     _add_textbox(slide, Inches(1), Inches(6.5), Inches(11), Inches(0.5),
                  'github.com  |  FireSense 2023  |  MASTER L1B',
-                 font_size=14, color=MED_GRAY,
+                 font_size=14, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
+
+    # ══════════════════════════════════════════════════════════════════
+    # BACKUP SLIDES
+    # ══════════════════════════════════════════════════════════════════
+
+    # Backup separator
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_slide_bg(slide, VERY_LIGHT)
+    _add_textbox(slide, Inches(1), Inches(3), Inches(11), Inches(1),
+                 'Backup Slides', font_size=40, color=MED_GRAY, bold=True,
                  alignment=PP_ALIGN.CENTER)
+
+    # B1 — MLP vs Baseline: Active Fire (Night)
+    _gif_slide(prs,
+               'Backup: MLP vs Baseline \u2014 Active Fire Night (Flight 04)',
+               'plots/gifs/compare_ml_vs_simple_2480104_active.gif')
+
+    # B2 — MLP vs Baseline: Overnight
+    _gif_slide(prs,
+               'Backup: MLP vs Baseline \u2014 Overnight (Flight 05)',
+               'plots/gifs/compare_ml_vs_simple_2480105_overnight.gif')
+
+    # B3 — TabPFN Cls vs Baseline: Active Fire
+    _gif_slide(prs,
+               'Backup: TabPFN Cls vs Baseline \u2014 Active Fire (Flight 04)',
+               'plots/gifs/compare_simple_vs_tabpfn_classification_2480104_active.gif')
+
+    # B4 — TabPFN Reg vs Baseline: Active Fire
+    _gif_slide(prs,
+               'Backup: TabPFN Reg vs Baseline \u2014 Active Fire (Flight 04)',
+               'plots/gifs/compare_simple_vs_tabpfn_regression_2480104_active.gif')
+
+    # B5 — MLP Prediction Maps
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_slide_bg(slide, WHITE)
+    _add_title_bar(slide, 'Backup: MLP Spatial Prediction Maps')
+    _safe_add_image(slide, 'plots/tune_prediction_map_2480106.png',
+                    Inches(1.5), Inches(1.8), width=Inches(10))
+
+    # B6 — MLP Probability Calibration
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_slide_bg(slide, WHITE)
+    _add_title_bar(slide, 'Backup: MLP Probability Calibration')
+    _safe_add_image(slide, 'plots/tune_probability_hist.png',
+                    Inches(3), Inches(1.8), width=Inches(7))
+
+    # B7 — Grid Resolution Comparison
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_slide_bg(slide, WHITE)
+    _add_title_bar(slide, 'Backup: Grid Resolution Comparison')
+    _safe_add_image(slide, 'plots/grid_resolution_comparison.png',
+                    Inches(0.5), Inches(1.8), width=Inches(12))
+
+    # ── Disable auto-advance on all slides (manual click only) ──
+    from lxml import etree
+    nsmap = {'p': 'http://schemas.openxmlformats.org/presentationml/2006/main'}
+    for slide in prs.slides:
+        # Remove any existing transition element
+        for trans in slide._element.findall('p:transition', nsmap):
+            slide._element.remove(trans)
+        # Add transition with advClick=true, advTm removed (no auto-advance)
+        trans_el = etree.SubElement(
+            slide._element,
+            '{http://schemas.openxmlformats.org/presentationml/2006/main}transition')
+        trans_el.set('advClick', '1')
 
     # ── Save ──
     out_path = 'Fire_Detection_Presentation.pptx'
     prs.save(out_path)
+    n_main = 21
+    n_total = len(prs.slides)
     print(f'Saved presentation to {out_path}')
-    print(f'  {len(prs.slides)} slides')
+    print(f'  {n_main} main slides + {n_total - n_main} backup = {n_total} total')
 
 
 if __name__ == '__main__':

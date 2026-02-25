@@ -367,13 +367,11 @@ def plot_model_comparison():
 
 def plot_threshold_explanation():
     """Explain how the traditional T4-T11 threshold fire detection works."""
-    fig, axes = plt.subplots(1, 2, figsize=(24, 12))
+    fig, ax = plt.subplots(1, 1, figsize=(22, 11))
     fig.suptitle('Traditional Fire Detection: The T4 – T11 Method\n'
                  '"If it\'s hot AND hotter than its surroundings → probably fire"',
                  fontsize=26, fontweight='bold', y=0.98)
 
-    # Left panel: conceptual scatter diagram
-    ax = axes[0]
     ax.set_xlim(270, 450)
     ax.set_ylim(-10, 120)
 
@@ -427,12 +425,20 @@ def plot_threshold_explanation():
             bbox=dict(boxstyle='round', facecolor='#FFF8E1', alpha=0.95),
             verticalalignment='center')
 
-    # Right panel: what the dashed boxes mean
-    ax = axes[1]
+    plt.tight_layout(rect=[0, 0.02, 1, 0.93])
+    plt.savefig('plots/diagram_threshold_explanation.png', dpi=200, bbox_inches='tight')
+    print('Saved plots/diagram_threshold_explanation.png')
+    plt.close()
+
+
+def plot_realtime_legend():
+    """Legend explaining what the realtime simulation plots show."""
+    fig, ax = plt.subplots(1, 1, figsize=(22, 11))
     ax.set_xlim(-0.5, 10)
     ax.set_ylim(-0.5, 10.5)
     ax.axis('off')
-    ax.set_title('What the Realtime Plots Show', fontsize=22, fontweight='bold')
+    ax.set_title('Reading the Real-Time Simulation Plots',
+                 fontsize=26, fontweight='bold', pad=20)
 
     items = [
         ('Background', 'RdYlGn (NDVI) for daytime\ninferno (T4) for nighttime\n'
@@ -449,8 +455,8 @@ def plot_threshold_explanation():
 
     for i, (label, desc, color) in enumerate(items):
         y = 9 - i * 1.9
-        _box(ax, 0, y - 0.3, 3, 1.4, label, color=color, fontsize=18)
-        ax.text(3.3, y + 0.4, desc, fontsize=18, va='center',
+        _box(ax, 0.5, y - 0.3, 3, 1.4, label, color=color, fontsize=18)
+        ax.text(3.8, y + 0.4, desc, fontsize=18, va='center',
                 color='#333', linespacing=1.3)
 
     ax.text(5, 0,
@@ -459,9 +465,117 @@ def plot_threshold_explanation():
             ha='center', fontsize=20, color='#444',
             bbox=dict(boxstyle='round', facecolor='#F0F0F0', alpha=0.9))
 
-    plt.tight_layout(rect=[0, 0.02, 1, 0.93])
-    plt.savefig('plots/diagram_threshold_explanation.png', dpi=200, bbox_inches='tight')
-    print('Saved plots/diagram_threshold_explanation.png')
+    plt.tight_layout()
+    plt.savefig('plots/diagram_realtime_legend.png', dpi=200, bbox_inches='tight')
+    print('Saved plots/diagram_realtime_legend.png')
+    plt.close()
+
+
+def plot_multipass_scanning():
+    """Illustrate how multi-pass scanning builds features over repeated overflights."""
+    fig, ax = plt.subplots(1, 1, figsize=(24, 12))
+    ax.set_xlim(-0.5, 24)
+    ax.set_ylim(-0.5, 12)
+    ax.axis('off')
+    ax.set_title('Multi-Pass Scanning: How Features Accumulate\n'
+                 '"The plane flies over the same spot multiple times — we remember everything"',
+                 fontsize=26, fontweight='bold', pad=20)
+
+    # --- Left: grid with overlapping scan swaths ---
+    grid_x, grid_y = 0.5, 3.5
+    grid_w, grid_h = 7.5, 7
+    # Draw grid cells (5x5)
+    cell_w = grid_w / 5
+    cell_h = grid_h / 5
+    for r in range(5):
+        for c in range(5):
+            cx = grid_x + c * cell_w
+            cy = grid_y + r * cell_h
+            rect = FancyBboxPatch((cx, cy), cell_w - 0.05, cell_h - 0.05,
+                                  boxstyle="square,pad=0",
+                                  facecolor='#E8F5E9', edgecolor='#999',
+                                  linewidth=1)
+            ax.add_patch(rect)
+
+    # Highlight one cell (row 2, col 2)
+    hx = grid_x + 2 * cell_w
+    hy = grid_y + 2 * cell_h
+    rect = FancyBboxPatch((hx, hy), cell_w - 0.05, cell_h - 0.05,
+                          boxstyle="square,pad=0",
+                          facecolor='#FEE2E2', edgecolor='#DC2626',
+                          linewidth=3)
+    ax.add_patch(rect)
+
+    # Draw diagonal scan swaths
+    swath_colors = ['#3B82F6', '#F59E0B', '#7C3AED', '#059669']
+    swath_labels = ['Sweep 1', 'Sweep 5', 'Sweep 12', 'Sweep 22']
+    for i, (color, label) in enumerate(zip(swath_colors, swath_labels)):
+        offset = i * 0.35
+        x1 = grid_x + offset
+        y1 = grid_y + grid_h + 0.3 - offset * 0.5
+        x2 = grid_x + grid_w - 1.5 + offset
+        y2 = grid_y - 0.3 + offset * 0.5
+        ax.plot([x1, x2], [y1, y2], color=color, linewidth=6, alpha=0.35, zorder=5)
+        ax.text(x2 + 0.1, y2 - 0.1, label, fontsize=14, color=color,
+                fontweight='bold', va='top')
+
+    ax.text(grid_x + grid_w / 2, grid_y - 0.5,
+            'Lat/Lon Grid  (0.00025\u00b0 cells \u2248 28 m)',
+            ha='center', fontsize=18, fontweight='bold', color='#333')
+
+    # --- Arrow from grid to accumulator ---
+    _arrow(ax, 8.3, 7, 9.5, 7)
+    ax.text(8.9, 7.8, 'same\ncell', ha='center', fontsize=16,
+            color='#DC2626', fontweight='bold')
+
+    # --- Middle: accumulator timeline ---
+    ax.text(14.5, 11.5, 'What Happens Inside One Grid Cell',
+            ha='center', fontsize=22, fontweight='bold', color='#DC2626')
+
+    passes = [
+        ('Sweep 1', 'T4=298 K', 'obs=1', '#E8F5E9', 'No fire'),
+        ('Sweep 5', 'T4=310 K', 'obs=2', '#FEF3C7', 'Warm'),
+        ('Sweep 12', 'T4=385 K', 'obs=3', '#FEE2E2', 'FIRE!'),
+        ('Sweep 22', 'T4=402 K', 'obs=4', '#FEE2E2', 'FIRE!'),
+    ]
+
+    for i, (sweep, temp, obs, bg_color, status) in enumerate(passes):
+        bx = 9.8
+        by = 9.5 - i * 2.0
+        bw = 9.5
+        bh = 1.5
+        rect = FancyBboxPatch((bx, by), bw, bh, boxstyle="round,pad=0.1",
+                              facecolor=bg_color, edgecolor='#999',
+                              linewidth=2)
+        ax.add_patch(rect)
+        ax.text(bx + 0.3, by + bh / 2, sweep, fontsize=18,
+                fontweight='bold', va='center', color='#333')
+        ax.text(bx + 3, by + bh / 2, temp, fontsize=18,
+                va='center', color='#333')
+        ax.text(bx + 5.5, by + bh / 2, obs, fontsize=18,
+                va='center', color='#333')
+        status_color = '#DC2626' if 'FIRE' in status else '#059669'
+        ax.text(bx + 7.5, by + bh / 2, status, fontsize=18,
+                fontweight='bold', va='center', color=status_color)
+
+        if i < len(passes) - 1:
+            ax.annotate('\u2193', xy=(14.5, by - 0.1),
+                        fontsize=28, ha='center', color='#666')
+
+    # --- Bottom: resulting features ---
+    ax.text(12, 1.8,
+            'Running accumulators update with EVERY pass:  '
+            'T4_max=402 K  |  T4_mean=349 K  |  dT_max=107 K  |  '
+            'obs_count=4  |  fire_count=2\n'
+            'Multi-pass consistency: fire in \u22652 passes \u2192 high-confidence detection  '
+            '(eliminated 52% of pre-burn false positives)',
+            ha='center', fontsize=18, color='#444',
+            bbox=dict(boxstyle='round', facecolor='#F0F0F0', alpha=0.9))
+
+    plt.tight_layout()
+    os.makedirs('plots', exist_ok=True)
+    plt.savefig('plots/diagram_multipass_scanning.png', dpi=200, bbox_inches='tight')
+    print('Saved plots/diagram_multipass_scanning.png')
     plt.close()
 
 
@@ -472,6 +586,8 @@ def main():
     plot_model_io()
     plot_model_comparison()
     plot_threshold_explanation()
+    plot_realtime_legend()
+    plot_multipass_scanning()
     print('\nAll diagrams generated in plots/')
 
 
