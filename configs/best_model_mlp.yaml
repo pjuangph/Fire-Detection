@@ -14,10 +14,10 @@ training:
     fire: 5
     other: 1
 metrics:
-  error_rate: 0.030877812086457873
-  precision: 0.976056338028169
-  recall: 0.9934936038817821
-  TP: 9009
-  FP: 221
-  FN: 59
-  TN: 519558
+  error_rate: 0.06671812968681076
+  precision: 0.9726348709929633
+  recall: 0.9602999558888399
+  TP: 8708
+  FP: 245
+  FN: 360
+  TN: 519534

@@ -29,10 +29,14 @@ from models.firemlp import FireMLP
 from lib import group_files_by_flight
 from lib.inference import FEATURE_NAMES
 from lib.evaluation import get_device, evaluate
-from lib.losses import SoftErrorRateLoss
+from lib.losses import (
+    SoftErrorRateLoss, TverskyLoss, FocalErrorRateLoss, CombinedLoss,
+)
+from torch.nn.utils import clip_grad_norm_
 from lib.training import (
     load_all_data, extract_train_test, oversample_minority,
     load_existing_results, save_incremental,
+    compute_error_rate, coerce_metrics,
     FlightFeatures,
 )
 
@@ -54,6 +58,11 @@ def train_model(
     loss_fn: str = 'bce',
     hidden_layers: list[int] | None = None,
     P_total: float | None = None,
+    gt_mask: NDArrayFloat | None = None,
+    gt_fp_penalty: float = 5.0,
+    loss_kwargs: dict[str, Any] | None = None,
+    grad_clip_norm: float = 1.0,
+    dropout: float = 0.0,
     quiet: bool = False,
     resume_from: str | None = None,
     save_path: str | None = None,
@@ -62,6 +71,10 @@ def train_model(
     """Train FireMLP with the selected loss function.
 
     Args:
+        loss_kwargs: Extra hyperparameters for the loss (e.g. alpha/beta
+            for Tversky, gamma for focal, lam for combined).
+        grad_clip_norm: Max gradient norm for clipping. Default 1.0.
+        dropout: Dropout probability for FireMLP hidden layers. Default 0.0.
         quiet: If True, suppress per-epoch progress bar.
         resume_from: Checkpoint path to resume training from.
         save_path: If set, save checkpoint to this path periodically.
@@ -75,16 +88,46 @@ def train_model(
     if not quiet:
         print(f'  Device: {device}')
 
-    model = FireMLP(hidden_layers=hidden_layers).to(device)
-    use_error_rate = loss_fn == 'error-rate'
-    if use_error_rate:
-        if P_total is None:
-            P_total = float(y_train.sum())
-        criterion = SoftErrorRateLoss(P_total).to(device)
-        loss_label = f'Soft (FN+FP)/P, P={P_total:.0f}'
-    else:
+    model = FireMLP(hidden_layers=hidden_layers, dropout=dropout).to(device)
+    lk = loss_kwargs or {}
+
+    # Build loss criterion based on loss_fn string.
+    # All losses except BCE use a unified forward(logits, y, w, gt_mask).
+    uses_unified_forward = True
+    if loss_fn == 'bce':
         criterion = nn.BCEWithLogitsLoss(reduction='none')
         loss_label = 'Pixel Weighted BCE'
+        uses_unified_forward = False
+    elif loss_fn == 'error-rate':
+        if P_total is None:
+            P_total = float(y_train.sum())
+        criterion = SoftErrorRateLoss(P_total, gt_fp_penalty=gt_fp_penalty).to(device)
+        loss_label = f'Soft (FN+FP)/P, P={P_total:.0f}, gt_pen={gt_fp_penalty}'
+    elif loss_fn == 'tversky':
+        if P_total is None:
+            P_total = float(y_train.sum())
+        alpha = lk.get('alpha', 0.3)
+        beta = lk.get('beta', 0.7)
+        criterion = TverskyLoss(
+            alpha=alpha, beta=beta, P_total=P_total,
+            gt_fp_penalty=gt_fp_penalty).to(device)
+        loss_label = f'Tversky(a={alpha},b={beta}), gt_pen={gt_fp_penalty}'
+    elif loss_fn == 'focal-error-rate':
+        if P_total is None:
+            P_total = float(y_train.sum())
+        gamma = lk.get('gamma', 2.0)
+        criterion = FocalErrorRateLoss(
+            P_total, gamma=gamma, gt_fp_penalty=gt_fp_penalty).to(device)
+        loss_label = f'FocalER(g={gamma}), P={P_total:.0f}'
+    elif loss_fn == 'combined':
+        if P_total is None:
+            P_total = float(y_train.sum())
+        lam = lk.get('lam', 0.5)
+        criterion = CombinedLoss(
+            P_total, lam=lam, gt_fp_penalty=gt_fp_penalty).to(device)
+        loss_label = f'Combined(lam={lam}), P={P_total:.0f}'
+    else:
+        raise ValueError(f'Unknown loss_fn: {loss_fn!r}')
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs)
 
@@ -114,8 +157,12 @@ def train_model(
     X_t = torch.tensor(X_train, dtype=torch.float32)
     y_t = torch.tensor(y_train, dtype=torch.float32)
     w_t = torch.tensor(w_train, dtype=torch.float32)
+    if gt_mask is not None:
+        gt_t = torch.tensor(gt_mask, dtype=torch.float32)
+    else:
+        gt_t = torch.zeros_like(y_t)
 
-    dataset = torch.utils.data.TensorDataset(X_t, y_t, w_t)
+    dataset = torch.utils.data.TensorDataset(X_t, y_t, w_t, gt_t)
     loader = torch.utils.data.DataLoader(
         dataset, batch_size=batch_size, shuffle=True)
 
@@ -126,18 +173,20 @@ def train_model(
         epoch = start_epoch + i
         model.train()
         total_loss = 0.0
-        for X_batch, y_batch, w_batch in loader:
+        for X_batch, y_batch, w_batch, gt_batch in loader:
             X_batch = X_batch.to(device)
             y_batch = y_batch.to(device)
             w_batch = w_batch.to(device)
+            gt_batch = gt_batch.to(device)
             optimizer.zero_grad()
             logits = model(X_batch)
-            if use_error_rate:
-                loss = criterion(logits, y_batch, w_batch)
+            if uses_unified_forward:
+                loss = criterion(logits, y_batch, w_batch, gt_mask=gt_batch)
             else:
                 loss_per_sample = criterion(logits, y_batch)
                 loss = (loss_per_sample * w_batch).mean()
             loss.backward()
+            clip_grad_norm_(model.parameters(), max_norm=grad_clip_norm)
             optimizer.step()
             total_loss += loss.item() * len(X_batch)
 
@@ -180,33 +229,65 @@ def build_combos(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     layers_list = space['layers']
     lrs = space['learning_rate']
     weight_configs = space.get('importance_weights', [{'gt': 10, 'fire': 5, 'other': 1}])
+    dropouts = space.get('dropout', [0.0])
+    grad_clips = space.get('grad_clip_norm', [1.0])
+
+    # Loss-specific hyperparameters
+    tversky_params = space.get('tversky_params', [{'alpha': 0.3, 'beta': 0.7}])
+    focal_params = space.get('focal_params', [{'gamma': 2.0}])
+    combined_params = space.get('combined_params', [{'lam': 0.5}])
+
+    # Per-loss overrides for layers / learning_rate
+    loss_overrides = space.get('loss_overrides', {})
+    DEFAULT_WEIGHTS = {'gt': 10, 'fire': 5, 'other': 1}
 
     combos: list[dict[str, Any]] = []
-    for loss, layers, lr in itertools.product(losses, layers_list, lrs):
-        if loss == 'error-rate':
-            # Error-rate uses uniform weights; only 1 weight combo needed
-            combos.append({
+    for loss in losses:
+        override = loss_overrides.get(loss, {})
+        loss_layers = override.get('layers', layers_list)
+        loss_lrs = override.get('learning_rate', lrs)
+
+        for layers, lr, dp, gc in itertools.product(
+                loss_layers, loss_lrs, dropouts, grad_clips):
+            base = {
                 'loss': loss,
                 'layers': list(layers),
                 'learning_rate': lr,
-                'importance_weights': {'gt': 10, 'fire': 5, 'other': 1},
-            })
-        else:
-            for wc in weight_configs:
-                combos.append({
-                    'loss': loss,
-                    'layers': list(layers),
-                    'learning_rate': lr,
-                    'importance_weights': dict(wc),
-                })
+                'dropout': dp,
+                'grad_clip_norm': gc,
+            }
+
+            if loss == 'bce':
+                for wc in weight_configs:
+                    combos.append({**base, 'importance_weights': dict(wc),
+                                   'loss_kwargs': {}})
+            elif loss == 'error-rate':
+                combos.append({**base, 'importance_weights': DEFAULT_WEIGHTS,
+                               'loss_kwargs': {}})
+            elif loss == 'tversky':
+                for tp in tversky_params:
+                    combos.append({**base, 'importance_weights': DEFAULT_WEIGHTS,
+                                   'loss_kwargs': dict(tp)})
+            elif loss == 'focal-error-rate':
+                for fp in focal_params:
+                    combos.append({**base, 'importance_weights': DEFAULT_WEIGHTS,
+                                   'loss_kwargs': dict(fp)})
+            elif loss == 'combined':
+                for cp in combined_params:
+                    combos.append({**base, 'importance_weights': DEFAULT_WEIGHTS,
+                                   'loss_kwargs': dict(cp)})
     return combos
 
 
 def _combo_key(combo: dict[str, Any]) -> str:
     """Build a unique string key for a hyperparameter combo."""
     wc = combo['importance_weights']
+    lk = combo.get('loss_kwargs', {})
+    lk_str = '|'.join(f'{k}={v}' for k, v in sorted(lk.items())) if lk else ''
+    dp = combo.get('dropout', 0.0)
+    gc = combo.get('grad_clip_norm', 1.0)
     return (f"{combo['loss']}|{combo['layers']}|{combo['learning_rate']}"
-            f"|{wc['gt']}/{wc['fire']}/{wc['other']}")
+            f"|{wc['gt']}/{wc['fire']}/{wc['other']}|{lk_str}|dp={dp}|gc={gc}")
 
 
 def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
@@ -231,6 +312,9 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             'loss': r['loss'], 'layers': r['layers'],
             'learning_rate': r['learning_rate'],
             'importance_weights': r['importance_weights'],
+            'loss_kwargs': r.get('loss_kwargs', {}),
+            'dropout': r.get('dropout', 0.0),
+            'grad_clip_norm': r.get('grad_clip_norm', 1.0),
         })
         existing_by_key[key] = r
 
@@ -243,11 +327,11 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
               f'{n_resume} under-trained (will resume), '
               f'{len(combos) - len(existing_by_key)} new')
 
-    # Fit scaler once on all data
-    all_X = np.concatenate([ff['X'] for ff in flight_features.values()])
-    all_X = np.where(np.isfinite(all_X), all_X, 0.0).astype(np.float32)
+    # Fit scaler on ground-truth flight only (pre-burn = "normal" baseline)
+    gt_X = flight_features['24-801-03']['X']
+    gt_X_clean = np.where(np.isfinite(gt_X), gt_X, 0.0).astype(np.float32)
     scaler = StandardScaler()
-    scaler.fit(all_X)
+    scaler.fit(gt_X_clean)
 
     os.makedirs('checkpoint', exist_ok=True)
     results: list[dict[str, Any]] = [
@@ -262,7 +346,9 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         layers = combo['layers']
         lr = combo['learning_rate']
         wc = combo['importance_weights']
-        use_error_rate = loss == 'error-rate'
+        loss_kwargs = combo.get('loss_kwargs', {})
+        dp = combo.get('dropout', 0.0)
+        gc = combo.get('grad_clip_norm', 1.0)
         key = _combo_key(combo)
 
         ckpt_path = f'checkpoint/fire_detector_mlp_run_{run_id:02d}.pt'
@@ -295,13 +381,20 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
 
         arch_str = ' -> '.join(['12'] + [str(h) for h in layers] + ['1'])
         wt_str = f"gt={wc['gt']}, fire={wc['fire']}, other={wc['other']}"
+        extra = ''
+        if loss_kwargs:
+            extra += f', {loss_kwargs}'
+        if dp > 0:
+            extra += f', dropout={dp}'
         print(f'\n{"=" * 60}')
-        print(f'Run {run_id}/{n_combos}: {loss}, {arch_str}, lr={lr}, weights=[{wt_str}]')
+        print(f'Run {run_id}/{n_combos}: {loss}, {arch_str}, lr={lr}, '
+              f'weights=[{wt_str}]{extra}')
         print('=' * 60)
         if resume_ckpt:
             print(f'  Resuming from checkpoint ({resume_epochs}/{epochs} epochs)')
 
-        X_train, y_train, w_train, X_test, y_test, w_test = extract_train_test(
+        (X_train, y_train, w_train, flight_src_train,
+         X_test, y_test, w_test, flight_src_test) = extract_train_test(
             flight_features,
             train_flights=['24-801-04', '24-801-05'],
             test_flights=['24-801-06'],
@@ -312,11 +405,14 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             importance_other=float(wc['other']),
         )
 
-        P_original = float(y_train.sum())
-        X_ready, y_ready, w_ready = oversample_minority(X_train, y_train, w_train)
-
-        if use_error_rate:
-            w_ready = np.ones_like(w_ready)
+        # Build GT mask before oversampling, carry through as extra column
+        gt_mask_train = (flight_src_train == '24-801-03').astype(np.float32)
+        gt_col = gt_mask_train.reshape(-1, 1)
+        X_aug = np.concatenate([X_train, gt_col], axis=1)
+        X_aug_ready, y_ready, w_ready = oversample_minority(X_aug, y_train, w_train)
+        X_ready = X_aug_ready[:, :-1]       # features
+        gt_mask_ready = X_aug_ready[:, -1]   # GT mask (survived same shuffle)
+        P_total = float(y_ready.sum())  # After oversampling
 
         X_clean = np.where(np.isfinite(X_ready), X_ready, 0.0).astype(np.float32)
         X_norm = scaler.transform(X_clean).astype(np.float32)
@@ -327,7 +423,9 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         train_result = train_model(
             X_norm, y_ready, w_ready,
             n_epochs=epochs, lr=lr, batch_size=batch_size,
-            loss_fn=loss, hidden_layers=layers, P_total=P_original,
+            loss_fn=loss, hidden_layers=layers, P_total=P_total,
+            gt_mask=gt_mask_ready, loss_kwargs=loss_kwargs,
+            grad_clip_norm=gc, dropout=dp,
             quiet=False, resume_from=resume_ckpt,
             save_path=ckpt_path, save_every=save_every)
 
@@ -340,8 +438,12 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         train_metrics, _ = evaluate(model, X_train_norm, y_train)
         test_metrics, _ = evaluate(model, X_test_norm, y_test)
 
-        test_P = test_metrics['TP'] + test_metrics['FN']
-        error_rate = (test_metrics['FN'] + test_metrics['FP']) / max(test_P, 1)
+        # Per-flight evaluation: Flight 03 FP
+        gt_mask_test = flight_src_test == '24-801-03'
+        gt03_metrics, _ = evaluate(model, X_test_norm[gt_mask_test],
+                                   y_test[gt_mask_test])
+
+        error_rate = compute_error_rate(test_metrics)
 
         torch.save({
             'model_state': model.state_dict(),
@@ -353,9 +455,11 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             'scaler': scaler,
             'n_features': 12,
             'hidden_layers': model.hidden_layers,
+            'dropout': dp,
             'threshold': 0.5,
             'feature_names': FEATURE_NAMES,
             'loss_fn': loss,
+            'loss_kwargs': loss_kwargs,
             'loss_history': loss_history[:, 0].tolist(),
         }, ckpt_path)
 
@@ -367,12 +471,14 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             'layers': layers,
             'learning_rate': lr,
             'importance_weights': wc,
+            'loss_kwargs': loss_kwargs,
+            'dropout': dp,
+            'grad_clip_norm': gc,
             'epochs_completed': epochs_completed,
-            'train': {k: (float(v) if isinstance(v, (int, float, np.integer, np.floating)) else v)
-                      for k, v in train_metrics.items()},
-            'test': {k: (float(v) if isinstance(v, (int, float, np.integer, np.floating)) else v)
-                     for k, v in test_metrics.items()},
+            'train': coerce_metrics(train_metrics),
+            'test': coerce_metrics(test_metrics),
             'error_rate': float(error_rate),
+            'flight03_FP': int(gt03_metrics['FP']),
             'final_loss': final_loss,
             'loss_history': loss_history[:, 0].tolist(),
             'checkpoint': ckpt_path,
@@ -385,6 +491,8 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
               f'FN={train_metrics["FN"]:,} TN={train_metrics["TN"]:,}')
         print(f'  Test:  TP={test_metrics["TP"]:,} FP={test_metrics["FP"]:,} '
               f'FN={test_metrics["FN"]:,} TN={test_metrics["TN"]:,}')
+        print(f'  Flight 03 FP: {gt03_metrics["FP"]:,} '
+              f'(threshold baseline: 70)')
         print(f'  Precision={test_metrics["precision"]:.4f} '
               f'Recall={test_metrics["recall"]:.4f} '
               f'Error rate={error_rate:.4f}')
@@ -400,9 +508,9 @@ def print_results_table(results: list[dict[str, Any]], metric: str) -> None:
     print(f'Grid Search Results (sorted by {metric}, best first)')
     print('=' * 100)
 
-    header = (f'  {"Run":>3s}  {"Loss":<10s}  {"Layers":<18s}  {"LR":>8s}  '
-              f'{"Weights":<16s}  {"TP":>6s}  {"FP":>5s}  {"FN":>5s}  '
-              f'{"Prec":>6s}  {"Rec":>6s}  {"ErrRate":>7s}')
+    header = (f'  {"Run":>3s}  {"Loss":<16s}  {"Layers":<18s}  {"LR":>8s}  '
+              f'{"Weights":<12s}  {"Extra":<16s}  {"TP":>6s}  {"FP":>5s}  '
+              f'{"FN":>5s}  {"Prec":>6s}  {"Rec":>6s}  {"ErrRate":>7s}')
     print(header)
     print('  ' + '-' * (len(header) - 2))
 
@@ -410,9 +518,15 @@ def print_results_table(results: list[dict[str, Any]], metric: str) -> None:
         wc = r['importance_weights']
         wt_str = f"{wc['gt']}/{wc['fire']}/{wc['other']}"
         layers_str = 'x'.join(str(h) for h in r['layers'])
+        lk = r.get('loss_kwargs', {})
+        dp = r.get('dropout', 0.0)
+        extra_parts = [f'{k}={v}' for k, v in sorted(lk.items())]
+        if dp > 0:
+            extra_parts.append(f'dp={dp}')
+        extra_str = ','.join(extra_parts) if extra_parts else '-'
         t = r['test']
-        print(f'  {r["run_id"]:>3d}  {r["loss"]:<10s}  {layers_str:<18s}  '
-              f'{r["learning_rate"]:>8.4f}  {wt_str:<16s}  '
+        print(f'  {r["run_id"]:>3d}  {r["loss"]:<16s}  {layers_str:<18s}  '
+              f'{r["learning_rate"]:>8.4f}  {wt_str:<12s}  {extra_str:<16s}  '
               f'{t["TP"]:>6.0f}  {t["FP"]:>5.0f}  {t["FN"]:>5.0f}  '
               f'{t["precision"]:>6.4f}  {t["recall"]:>6.4f}  '
               f'{r["error_rate"]:>7.4f}')
@@ -434,6 +548,9 @@ def write_best_model_config(best: dict[str, Any], checkpoint_path: str,
             'layers': best['layers'],
             'learning_rate': best['learning_rate'],
             'epochs': best['epochs_completed'],
+            'dropout': best.get('dropout', 0.0),
+            'grad_clip_norm': best.get('grad_clip_norm', 1.0),
+            'loss_kwargs': best.get('loss_kwargs', {}),
             'importance_weights': {
                 'gt': wc['gt'],
                 'fire': wc['fire'],
@@ -466,7 +583,9 @@ def main() -> None:
     parser.add_argument(
         '--config', type=str, default=None,
         help='Path to YAML grid search config (default: configs/grid_search_mlp.yaml)')
-    parser.add_argument('--loss', choices=['bce', 'error-rate'], default=None)
+    parser.add_argument('--loss', choices=[
+        'bce', 'error-rate', 'tversky', 'focal-error-rate', 'combined',
+    ], default=None)
     parser.add_argument('--layers', type=int, nargs='+', default=None)
     parser.add_argument('--lr', type=float, default=None)
     parser.add_argument('--epochs', type=int, default=100)
@@ -516,7 +635,17 @@ def main() -> None:
 
     print_results_table(results, metric)
 
-    best = min(results, key=lambda r: r.get(metric, float('inf')))
+    # Select best model: prefer low error_rate but Flight 03 FP must be <= threshold
+    THRESHOLD_FP = 70
+    eligible = [r for r in results
+                if r.get('flight03_FP', float('inf')) <= THRESHOLD_FP]
+    if eligible:
+        best = min(eligible, key=lambda r: r.get(metric, float('inf')))
+        print(f'\n  {len(eligible)}/{len(results)} models have Flight 03 FP <= {THRESHOLD_FP}')
+    else:
+        best = min(results, key=lambda r: r.get('flight03_FP', float('inf')))
+        print(f'\n  WARNING: No model has Flight 03 FP <= {THRESHOLD_FP}. '
+              f'Selected lowest FP: {best.get("flight03_FP")}')
     best_ckpt = best['checkpoint']
     best_path = 'checkpoint/fire_detector_mlp_best.pt'
     shutil.copy2(best_ckpt, best_path)
@@ -529,9 +658,16 @@ def main() -> None:
     print(f'\n{"=" * 60}')
     print(f'Best run: #{best["run_id"]}')
     print(f'  Loss:         {best["loss"]}')
+    lk = best.get('loss_kwargs', {})
+    if lk:
+        print(f'  Loss params:  {lk}')
     print(f'  Architecture: {arch}')
     print(f'  LR:           {best["learning_rate"]}')
     print(f'  Weights:      gt={wc["gt"]}, fire={wc["fire"]}, other={wc["other"]}')
+    dp = best.get('dropout', 0.0)
+    if dp > 0:
+        print(f'  Dropout:      {dp}')
+    print(f'  Grad clip:    {best.get("grad_clip_norm", 1.0)}')
     print(f'  Error rate:   {best["error_rate"]:.4f}')
     print(f'  Precision:    {best["test"]["precision"]:.4f}')
     print(f'  Recall:       {best["test"]["recall"]:.4f}')

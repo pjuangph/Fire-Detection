@@ -203,10 +203,12 @@ def simulate_flight(flight_num: str, files: list[str],
             print(f'Initial grid: {gs["nrows"]} x {gs["ncols"]}, '
                   f'cell area: {cell_area:.0f} m\u00b2')
 
+        threshold_mask = get_fire_mask(gs)
         if ml_model is not None:
-            fire_mask = ml_model.predict_from_gs(gs)
+            ml_mask = ml_model.predict_from_gs(gs)
+            fire_mask = threshold_mask & ml_mask  # hybrid: intersection
         else:
-            fire_mask = get_fire_mask(gs)
+            fire_mask = threshold_mask
         fire_total = int(np.sum(fire_mask))
 
         render_frame(
@@ -219,10 +221,12 @@ def simulate_flight(flight_num: str, files: list[str],
               f'new fire: {n_new_fire:,}, total: {fire_total:,}')
 
     # Final summary
+    threshold_mask = get_fire_mask(gs)
     if ml_model is not None:
-        fire_mask = ml_model.predict_from_gs(gs)
+        ml_mask = ml_model.predict_from_gs(gs)
+        fire_mask = threshold_mask & ml_mask
     else:
-        fire_mask = get_fire_mask(gs)
+        fire_mask = threshold_mask
     fire_total = int(np.sum(fire_mask))
     total_area = fire_total * cell_area
 

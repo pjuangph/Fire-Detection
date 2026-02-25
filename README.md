@@ -14,6 +14,7 @@ Team Flaming Kitty's AI Fire Detection code! 🔥🐱
 - [Vegetation-Loss Fire Confirmation](#vegetation-loss-fire-confirmation)
 - [Real-Time Fire Detection](#real-time-fire-detection)
 - [ML Fire Detection](#ml-fire-detection)
+- [Reducing MLP False Positives](docs/reducing-false-positives.md)
 - [Examples: Fire vs No Fire](#examples-fire-vs-no-fire)
 - [Running the Code](#running-the-code)
 - [References](#references)
@@ -648,6 +649,20 @@ where P = total actual fire pixels. This penalizes both false alarms (FP) and mi
 - **Train**: Flights 03 (pre-burn) + 04 (day burn) + 05 (night burn)
 - **Test**: Flight 06 (day burn, unseen)
 - Labels: Pseudo-labels from the threshold detector
+
+### Reducing False Positives
+
+The MLP is deployed in **hybrid mode** — it can only confirm or reject pixels already flagged by the threshold detector (`threshold_mask & ml_mask`). This guarantees the MLP never introduces new false positives beyond the threshold baseline.
+
+Five training and inference fixes reduced Flight 03 (pre-burn) false positives from 128 to **49** (vs threshold baseline of 70):
+
+1. **Scaler fit on Flight 03 only** — prevents burn-data bias in normalization
+2. **Importance weights preserved** for error-rate loss (gt=10x, fire=5x)
+3. **GT FP penalty** in loss function (5x extra cost for FP on known no-fire pixels)
+4. **P_total after oversampling** — correct loss denominator
+5. **Hybrid threshold gating** — MLP filters threshold FP, cannot add new ones
+
+See [Reducing MLP False Positives](docs/reducing-false-positives.md) for full details.
 
 ---
 

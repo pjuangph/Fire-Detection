@@ -26,7 +26,6 @@ import torch
 import torch.nn.functional as F
 import yaml
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
@@ -43,7 +42,9 @@ from lib.inference import FEATURE_NAMES
 from lib.evaluation import auto_device, evaluate
 from lib.training import (
     load_all_data, load_existing_results, save_incremental,
-    build_representative_context, make_splitter,
+    build_representative_context, make_splitter, oversample_minority,
+    prepare_tabpfn_dataset, find_resume_checkpoint,
+    compute_error_rate, coerce_metrics,
     FlightFeatures,
 )
 
@@ -109,6 +110,13 @@ def train_tabpfn_model(
     )
     if not quiet:
         print(f'  Split: {len(X_train)} train, {len(X_test)} test '
+              f'({int(y_train.sum())} fire / {int((y_train == 0).sum())} no-fire)')
+
+    # Oversample fire class in training split only (avoid test set leakage)
+    w_ones = np.ones(len(y_train), dtype=np.float32)
+    X_train, y_train, _ = oversample_minority(X_train, y_train, w_ones, ratio=1.0)
+    if not quiet:
+        print(f'  After oversampling train: {len(X_train)} '
               f'({int(y_train.sum())} fire / {int((y_train == 0).sum())} no-fire)')
 
     classifier_init = {
@@ -292,12 +300,9 @@ def _evaluate_tabpfn(
     eval_clf = clone_model_for_evaluation(
         classifier, eval_init, TabPFNClassifier)
 
-    # Fit on a representative context sample
-    rng = np.random.default_rng(seed)
-    n = min(batch_size, len(X_train))
-    replace = len(X_train) < batch_size
-    idx = rng.choice(len(X_train), size=n, replace=replace)
-    eval_clf.fit(X_train[idx], y_train[idx])
+    # Fit on a stratified (balanced) context sample
+    ctx_X, ctx_y = build_representative_context(X_train, y_train, batch_size, seed)
+    eval_clf.fit(ctx_X, ctx_y)
 
     return evaluate(eval_clf, X_eval, y_eval)
 
@@ -369,24 +374,10 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
               f'{n_resume} under-trained (will resume), '
               f'{len(combos) - len(existing_by_key)} new')
 
-    # Build full dataset — ground truth flight (pre-burn) forced to y=0
-    gt_flight = '24-801-03'
-    X_parts, y_parts = [], []
-    for fnum, ff in flight_features.items():
-        X_parts.append(ff['X'])
-        if fnum == gt_flight:
-            y_parts.append(np.zeros(len(ff['X']), dtype=np.float32))
-        else:
-            y_parts.append(ff['y'])
-    X_all = np.concatenate(X_parts)
-    y_all = np.concatenate(y_parts)
-
-    # Fit scaler once on all features, then normalize
-    X_clean = np.where(np.isfinite(X_all), X_all, 0.0).astype(np.float32)
-    scaler = StandardScaler()
-    scaler.fit(X_clean)
-    X_norm = scaler.transform(X_clean).astype(np.float32)
-    y_norm = y_all.astype(np.float32)
+    X_norm, y_norm, scaler = prepare_tabpfn_dataset(flight_features)
+    print(f'  Dataset: {len(y_norm):,} samples '
+          f'({int(y_norm.sum()):,} fire / {int((y_norm == 0).sum()):,} no-fire)')
+    print(f'  (oversampling applied inside train split only)')
 
     os.makedirs('checkpoint', exist_ok=True)
     results: list[dict[str, Any]] = [
@@ -412,17 +403,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             print(f'\n  Run {run_id}/{n_combos}: SKIPPED (already completed)')
             continue
 
-        # Check for resume checkpoint on disk
-        resume_ckpt = None
-        if os.path.isfile(ckpt_path):
-            try:
-                ckpt_info = torch.load(ckpt_path, weights_only=False,
-                                       map_location='cpu')
-                resume_epochs = ckpt_info.get('epoch', 0)
-            except Exception:
-                resume_epochs = 0
-            if 0 < resume_epochs < epochs:
-                resume_ckpt = ckpt_path
+        resume_ckpt = find_resume_checkpoint(ckpt_path, epochs)
 
         print(f'\n{"=" * 60}')
         print(f'Run {run_id}/{n_combos}: lr={lr_val}, bs={bs}, '
@@ -458,8 +439,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             X_tr, y_tr, X_te, y_te,
             batch_size=bs, seed=seed)
 
-        test_P = test_metrics['TP'] + test_metrics['FN']
-        error_rate = (test_metrics['FN'] + test_metrics['FP']) / max(test_P, 1)
+        error_rate = compute_error_rate(test_metrics)
 
         # Build representative context for inference checkpoint
         ctx_X, ctx_y = build_representative_context(
@@ -493,10 +473,8 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             'weight_decay': wd,
             'grad_clip_norm': gc,
             'epochs_completed': epochs_completed,
-            'train': {k: (float(v) if isinstance(v, (int, float, np.integer, np.floating)) else v)
-                      for k, v in train_metrics.items()},
-            'test': {k: (float(v) if isinstance(v, (int, float, np.integer, np.floating)) else v)
-                     for k, v in test_metrics.items()},
+            'train': coerce_metrics(train_metrics),
+            'test': coerce_metrics(test_metrics),
             'error_rate': float(error_rate),
             'final_loss': final_loss,
             'loss_history': loss_history[:, 0].tolist(),
@@ -633,7 +611,7 @@ def main() -> None:
     print(f'  Config:      {model_config_path}')
     print(f'  Results:     {results_path}')
     print(f'\n  To use in realtime:')
-    print(f'    python realtime_tabpfn.py --config {model_config_path}')
+    print(f'    python realtime_tabpfn_classification.py --config {model_config_path}')
 
     from lib.plotting import plot_convergence_curves
     plot_convergence_curves(

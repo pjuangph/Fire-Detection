@@ -485,11 +485,11 @@ def create_presentation():
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_slide_bg(slide, WHITE)
     _add_title_bar(slide, 'MLP vs Baseline \u2014 Pre-Burn (Flight 03)')
-    _add_subtitle(slide, 'Best MLP: SoftErrorRateLoss | [64, 32] | lr=0.01')
+    _add_subtitle(slide, 'Hybrid MLP: SoftErrorRateLoss | [64, 32] | lr=0.01 | threshold \u2229 MLP')
     _add_textbox(slide, Inches(0.6), Inches(1.85), Inches(12), Inches(0.4),
                  'No real fire present \u2014 all detections are false positives.  '
-                 'MLP: 0 \u2192 53 \u2192 128 FP across 9 sweeps  |  '
-                 'Threshold: 0 \u2192 70 FP',
+                 'Hybrid MLP: 0 \u2192 15 \u2192 49 FP across 9 sweeps  |  '
+                 'Threshold: 0 \u2192 70 FP  (30% reduction)',
                  font_size=16, color=ACCENT_RED, bold=False)
     _gif_path = 'plots/gifs/compare_ml_vs_simple_2480103_pre-burn.gif'
     added = _safe_add_image(slide, _gif_path,

@@ -24,8 +24,13 @@ from lib.stats import (
     format_area,
 )
 from lib.features import build_location_features
-from lib.losses import SoftErrorRateLoss, compute_pixel_weights
-from lib.evaluation import get_device, auto_device, evaluate, print_metrics
+from lib.losses import (
+    SoftErrorRateLoss, TverskyLoss, FocalErrorRateLoss, CombinedLoss,
+    compute_pixel_weights,
+)
+from lib.evaluation import (
+    get_device, auto_device, evaluate, compute_binary_metrics, print_metrics,
+)
 from lib.plotting import (
     plot_training_loss, plot_convergence_curves,
     plot_probability_hist, plot_prediction_map,
@@ -34,4 +39,6 @@ from lib.training import (
     load_all_data, extract_train_test, oversample_minority,
     load_existing_results, save_incremental,
     build_representative_context, safe_split, make_splitter,
+    prepare_tabpfn_dataset, find_resume_checkpoint,
+    compute_error_rate, coerce_metrics,
 )

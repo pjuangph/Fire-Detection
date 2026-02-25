@@ -21,6 +21,7 @@ class FireMLP(nn.Module):
         self,
         n_features: int = 12,
         hidden_layers: list[int] | None = None,
+        dropout: float = 0.0,
     ) -> None:
         """Initialize FireMLP.
 
@@ -28,17 +29,21 @@ class FireMLP(nn.Module):
             n_features: Number of input features. Default 12.
             hidden_layers: List of hidden layer sizes, e.g. [64, 32, 16, 8].
                 Default [64, 32] for backward compatibility.
+            dropout: Dropout probability between hidden layers. 0 = no dropout.
         """
         super().__init__()
         if hidden_layers is None:
             hidden_layers = [64, 32]
         self.hidden_layers = list(hidden_layers)
+        self.dropout = dropout
 
         layers: list[nn.Module] = []
         in_dim = n_features
         for h in hidden_layers:
             layers.append(nn.Linear(in_dim, h))
             layers.append(nn.ReLU())
+            if dropout > 0:
+                layers.append(nn.Dropout(dropout))
             in_dim = h
         layers.append(nn.Linear(in_dim, 1))
         self.net = nn.Sequential(*layers)
