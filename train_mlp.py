@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import csv
 import itertools
 import os
 import shutil
@@ -67,6 +68,8 @@ def train_model(
     resume_from: str | None = None,
     save_path: str | None = None,
     save_every: int = 25,
+    X_test: NDArrayFloat | None = None,
+    y_test: NDArrayFloat | None = None,
 ) -> TrainResult:
     """Train FireMLP with the selected loss function.
 
@@ -79,6 +82,8 @@ def train_model(
         resume_from: Checkpoint path to resume training from.
         save_path: If set, save checkpoint to this path periodically.
         save_every: Save checkpoint every N epochs (default 25).
+        X_test: Optional normalized test features for per-epoch evaluation.
+        y_test: Optional test labels for per-epoch evaluation.
 
     Returns:
         Dict with keys: model, loss_history, epochs_completed,
@@ -148,7 +153,7 @@ def train_model(
         model = model.cpu()
         return {
             'model': model,
-            'loss_history': np.zeros((0, 1)),
+            'loss_history': np.zeros((0, 7)),
             'epochs_completed': n_epochs,
             'optimizer_state': optimizer.state_dict(),
             'scheduler_state': scheduler.state_dict(),
@@ -166,13 +171,25 @@ def train_model(
     loader = torch.utils.data.DataLoader(
         dataset, batch_size=batch_size, shuffle=True)
 
+    # Prepare test tensors for per-epoch evaluation
+    has_test = X_test is not None and y_test is not None
+    X_test_t: torch.Tensor | None = None
+    y_test_t: torch.Tensor | None = None
+    if has_test:
+        X_test_t = torch.tensor(X_test, dtype=torch.float32, device=device)
+        y_test_t = torch.tensor(y_test, dtype=torch.float32, device=device)
+
     remaining = n_epochs - start_epoch
-    loss_history = np.zeros((remaining, 1))
+    # Columns: [loss, train_FP, train_FN, train_TP, test_FP, test_FN, test_TP]
+    loss_history = np.zeros((remaining, 7))
     pbar = trange(remaining, desc=loss_label, disable=quiet)
     for i in pbar:
         epoch = start_epoch + i
         model.train()
         total_loss = 0.0
+        train_FP = 0
+        train_FN = 0
+        train_TP = 0
         for X_batch, y_batch, w_batch, gt_batch in loader:
             X_batch = X_batch.to(device)
             y_batch = y_batch.to(device)
@@ -190,13 +207,34 @@ def train_model(
             optimizer.step()
             total_loss += loss.item() * len(X_batch)
 
+            # Accumulate train FP/FN/TP (reuses logits, zero overhead)
+            with torch.no_grad():
+                preds = (torch.sigmoid(logits.detach()) >= 0.5).float()
+                train_FP += int(((preds == 1) & (y_batch == 0)).sum().item())
+                train_FN += int(((preds == 0) & (y_batch == 1)).sum().item())
+                train_TP += int(((preds == 1) & (y_batch == 1)).sum().item())
+
         scheduler.step()
         avg_loss = total_loss / len(X_t)
-        loss_history[i] = avg_loss
+
+        # Per-epoch test evaluation (cheap forward pass, no gradients)
+        test_FP, test_FN, test_TP = 0, 0, 0
+        if has_test:
+            model.eval()
+            with torch.no_grad():
+                test_logits = model(X_test_t)
+                test_preds = (torch.sigmoid(test_logits) >= 0.5).float()
+                test_FP = int(((test_preds == 1) & (y_test_t == 0)).sum().item())
+                test_FN = int(((test_preds == 0) & (y_test_t == 1)).sum().item())
+                test_TP = int(((test_preds == 1) & (y_test_t == 1)).sum().item())
+
+        loss_history[i] = [avg_loss, train_FP, train_FN, train_TP,
+                           test_FP, test_FN, test_TP]
         cur_lr = scheduler.get_last_lr()[0]
         if not quiet:
             pbar.set_postfix({'loss': f'{avg_loss:.4e}', 'lr': f'{cur_lr:.1e}',
-                              'ep': f'{epoch + 1}/{n_epochs}'})
+                              'ep': f'{epoch + 1}/{n_epochs}',
+                              'tFP': train_FP, 'tFN': train_FN})
 
         # Periodic checkpoint save for crash recovery
         epochs_done = start_epoch + i + 1
@@ -427,7 +465,8 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             gt_mask=gt_mask_ready, loss_kwargs=loss_kwargs,
             grad_clip_norm=gc, dropout=dp,
             quiet=False, resume_from=resume_ckpt,
-            save_path=ckpt_path, save_every=save_every)
+            save_path=ckpt_path, save_every=save_every,
+            X_test=X_test_norm, y_test=y_test)
 
         model = train_result['model']
         loss_history = train_result['loss_history']
@@ -445,6 +484,16 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
 
         error_rate = compute_error_rate(test_metrics)
 
+        # Build epoch_metrics dict from expanded loss_history columns
+        epoch_metrics = {
+            'train_FP': loss_history[:, 1].astype(int).tolist(),
+            'train_FN': loss_history[:, 2].astype(int).tolist(),
+            'train_TP': loss_history[:, 3].astype(int).tolist(),
+            'test_FP': loss_history[:, 4].astype(int).tolist(),
+            'test_FN': loss_history[:, 5].astype(int).tolist(),
+            'test_TP': loss_history[:, 6].astype(int).tolist(),
+        }
+
         torch.save({
             'model_state': model.state_dict(),
             'optimizer_state': train_result['optimizer_state'],
@@ -461,6 +510,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             'loss_fn': loss,
             'loss_kwargs': loss_kwargs,
             'loss_history': loss_history[:, 0].tolist(),
+            'epoch_metrics': epoch_metrics,
         }, ckpt_path)
 
         final_loss = float(loss_history[-1, 0]) if len(loss_history) > 0 else 0.0
@@ -481,11 +531,36 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             'flight03_FP': int(gt03_metrics['FP']),
             'final_loss': final_loss,
             'loss_history': loss_history[:, 0].tolist(),
+            'epoch_metrics': epoch_metrics,
             'checkpoint': ckpt_path,
         }
         results.append(result)
 
         save_incremental(results, cfg, config_path, results_path)
+
+        # Checkpoint cleanup: keep only best + currently running
+        metric = cfg.get('metric', 'error_rate')
+        THRESHOLD_FP = 70
+        eligible = [r for r in results
+                    if r.get('flight03_FP', float('inf')) <= THRESHOLD_FP]
+        if eligible:
+            current_best = min(eligible,
+                               key=lambda r: r['test']['FP'] + r['test']['FN'])
+        else:
+            current_best = min(results,
+                               key=lambda r: r.get('flight03_FP', float('inf')))
+        best_so_far_path = 'checkpoint/fire_detector_mlp_best.pt'
+
+        if result['run_id'] == current_best['run_id']:
+            shutil.copy2(ckpt_path, best_so_far_path)
+
+        # Delete non-best completed run checkpoints
+        for r in results:
+            r_path = r.get('checkpoint', '')
+            if (r['run_id'] != current_best['run_id']
+                    and r_path and r_path != best_so_far_path
+                    and os.path.isfile(r_path)):
+                os.remove(r_path)
 
         print(f'  Train: TP={train_metrics["TP"]:,} FP={train_metrics["FP"]:,} '
               f'FN={train_metrics["FN"]:,} TN={train_metrics["TN"]:,}')
@@ -573,6 +648,51 @@ def write_best_model_config(best: dict[str, Any], checkpoint_path: str,
     return config_path
 
 
+def write_results_csv(results: list[dict[str, Any]],
+                      csv_path: str = 'results/grid_search_mlp_summary.csv',
+                      ) -> str:
+    """Write a CSV summary of all grid search runs for easy sorting/comparison."""
+    os.makedirs(os.path.dirname(csv_path) or '.', exist_ok=True)
+    fieldnames = [
+        'run_id', 'loss', 'layers', 'learning_rate',
+        'importance_gt', 'importance_fire', 'importance_other',
+        'dropout', 'grad_clip_norm', 'epochs_completed',
+        'train_TP', 'train_FP', 'train_FN',
+        'test_TP', 'test_FP', 'test_FN',
+        'flight03_FP', 'error_rate', 'precision', 'recall',
+    ]
+    with open(csv_path, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in sorted(results, key=lambda x: x['run_id']):
+            wc = r['importance_weights']
+            tr = r['train']
+            te = r['test']
+            writer.writerow({
+                'run_id': r['run_id'],
+                'loss': r['loss'],
+                'layers': 'x'.join(str(h) for h in r['layers']),
+                'learning_rate': r['learning_rate'],
+                'importance_gt': wc['gt'],
+                'importance_fire': wc['fire'],
+                'importance_other': wc['other'],
+                'dropout': r.get('dropout', 0.0),
+                'grad_clip_norm': r.get('grad_clip_norm', 1.0),
+                'epochs_completed': r['epochs_completed'],
+                'train_TP': int(tr['TP']),
+                'train_FP': int(tr['FP']),
+                'train_FN': int(tr['FN']),
+                'test_TP': int(te['TP']),
+                'test_FP': int(te['FP']),
+                'test_FN': int(te['FN']),
+                'flight03_FP': r.get('flight03_FP', ''),
+                'error_rate': f'{r["error_rate"]:.6f}',
+                'precision': f'{te["precision"]:.6f}',
+                'recall': f'{te["recall"]:.6f}',
+            })
+    return csv_path
+
+
 # ── Main ──────────────────────────────────────────────────────
 
 
@@ -598,10 +718,6 @@ def main() -> None:
     print('=' * 60)
     print('ML Fire Detection \u2014 MLP Hyperparameter Tuning')
     print('=' * 60)
-    print('\n--- Loading flight data ---')
-    flights = group_files_by_flight()
-    flight_features = load_all_data(flights)
-
     if single_mode:
         loss = args.loss or 'bce'
         layers = args.layers or [64, 32]
@@ -623,6 +739,12 @@ def main() -> None:
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
 
+    data_dir = cfg.get('data_dir', 'ignite_fire_data')
+    print('\n--- Loading flight data ---')
+    print(f'  Data directory: {data_dir}')
+    flights = group_files_by_flight(data_dir)
+    flight_features = load_all_data(flights)
+
     combos = build_combos(cfg)
     metric = cfg.get('metric', 'error_rate')
     print(f'\nConfig: {config_path}')
@@ -635,12 +757,18 @@ def main() -> None:
 
     print_results_table(results, metric)
 
-    # Select best model: prefer low error_rate but Flight 03 FP must be <= threshold
+    # CSV summary for easy sorting and comparison
+    csv_path = 'results/grid_search_mlp_summary.csv'
+    write_results_csv(results, csv_path)
+    print(f'\n  CSV summary: {csv_path}')
+
+    # Select best model: FP must be <= baseline threshold, then minimize FP+FN
     THRESHOLD_FP = 70
     eligible = [r for r in results
                 if r.get('flight03_FP', float('inf')) <= THRESHOLD_FP]
     if eligible:
-        best = min(eligible, key=lambda r: r.get(metric, float('inf')))
+        best = min(eligible,
+                   key=lambda r: r['test']['FP'] + r['test']['FN'])
         print(f'\n  {len(eligible)}/{len(results)} models have Flight 03 FP <= {THRESHOLD_FP}')
     else:
         best = min(results, key=lambda r: r.get('flight03_FP', float('inf')))
@@ -648,15 +776,17 @@ def main() -> None:
               f'Selected lowest FP: {best.get("flight03_FP")}')
     best_ckpt = best['checkpoint']
     best_path = 'checkpoint/fire_detector_mlp_best.pt'
-    shutil.copy2(best_ckpt, best_path)
+    if os.path.isfile(best_ckpt):
+        shutil.copy2(best_ckpt, best_path)
 
     model_config_path = 'configs/best_model_mlp.yaml'
     write_best_model_config(best, best_path, model_config_path)
 
     wc = best['importance_weights']
+    te = best['test']
     arch = ' -> '.join(['12'] + [str(h) for h in best['layers']] + ['1'])
     print(f'\n{"=" * 60}')
-    print(f'Best run: #{best["run_id"]}')
+    print(f'Best run: #{best["run_id"]}  (lowest FP+FN = {te["FP"] + te["FN"]:.0f})')
     print(f'  Loss:         {best["loss"]}')
     lk = best.get('loss_kwargs', {})
     if lk:
@@ -668,9 +798,10 @@ def main() -> None:
     if dp > 0:
         print(f'  Dropout:      {dp}')
     print(f'  Grad clip:    {best.get("grad_clip_norm", 1.0)}')
+    print(f'  Test TP={te["TP"]:.0f}  FP={te["FP"]:.0f}  FN={te["FN"]:.0f}')
     print(f'  Error rate:   {best["error_rate"]:.4f}')
-    print(f'  Precision:    {best["test"]["precision"]:.4f}')
-    print(f'  Recall:       {best["test"]["recall"]:.4f}')
+    print(f'  Precision:    {te["precision"]:.4f}')
+    print(f'  Recall:       {te["recall"]:.4f}')
     print(f'\n  Best model:  {best_path}')
     print(f'  Config:      {model_config_path}')
     print(f'  Results:     {results_path}')
@@ -679,10 +810,12 @@ def main() -> None:
     print(f'\n  To use in realtime:')
     print(f'    python realtime_mlp.py --config {model_config_path}')
 
-    from lib.plotting import plot_convergence_curves
+    from lib.plotting import plot_convergence_curves, plot_best_model_metrics
     plot_convergence_curves(results_path, out_path='plots/convergence_mlp.png',
                             title='MLP Fire Detector — Best Model Convergence',
                             top_n=1)
+    if best.get('epoch_metrics'):
+        plot_best_model_metrics(best, out_path='plots/best_model_metrics_mlp.png')
     print('Done.')
 
 

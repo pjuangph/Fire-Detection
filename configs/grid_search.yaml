@@ -8,6 +8,8 @@
 #
 # Grid size: BCE 3x3x3=27 + Error-rate 3x3=9 = 36 total runs.
 
+data_dir: /Volumes/fire_dev/challenge_data/data
+
 epochs: 100
 batch_size: 4096
 save_every: 25              # save checkpoint every N epochs for crash recovery

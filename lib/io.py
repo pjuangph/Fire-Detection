@@ -98,9 +98,19 @@ def process_file(filepath: str) -> dict[str, np.ndarray]:
     }
 
 
-def group_files_by_flight() -> dict[str, dict[str, Any]]:
-    """Group HDF files by flight number, sorted by start time within each flight."""
-    files = sorted(glob.glob('ignite_fire_data/*.hdf'))
+def group_files_by_flight(data_dir: str = 'ignite_fire_data') -> dict[str, dict[str, Any]]:
+    """Group HDF files by flight number, sorted by start time within each flight.
+
+    Args:
+        data_dir: Directory containing the HDF files. Default: 'ignite_fire_data'.
+    """
+    if not os.path.isdir(data_dir):
+        raise FileNotFoundError(f'Data directory not found: {data_dir}')
+    files = sorted(glob.glob(os.path.join(data_dir, '*.hdf')))
+    if not files:
+        raise FileNotFoundError(
+            f'No .hdf files found in {data_dir}')
+    print(f'  Found {len(files)} HDF files in {data_dir}')
     flights = {}
     for f in files:
         sd = SD(f, SDC.READ)

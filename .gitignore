@@ -1,7 +1,8 @@
 # Byte-compiled / optimized / DLL files
-__pycache__/
+*/__pycache__/
 *.py[codz]
 *$py.class
+*.pyc 
 
 # C extensions
 *.so
@@ -215,3 +216,5 @@ dataset/fire_features.pkl.gz
 /checkpoint
 ~$*.*
 *.pptx
+
+.databricks

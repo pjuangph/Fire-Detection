@@ -34,6 +34,7 @@ from lib.evaluation import (
 from lib.plotting import (
     plot_training_loss, plot_convergence_curves,
     plot_probability_hist, plot_prediction_map,
+    plot_best_model_metrics,
 )
 from lib.training import (
     load_all_data, extract_train_test, oversample_minority,

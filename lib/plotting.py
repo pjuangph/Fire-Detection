@@ -273,3 +273,93 @@ def plot_prediction_map(
     plt.savefig(outname, dpi=200, bbox_inches='tight')
     print(f'  Saved {outname}')
     plt.close()
+
+
+def plot_best_model_metrics(
+    result: dict[str, Any],
+    out_path: str = 'plots/best_model_metrics_mlp.png',
+    title_prefix: str = 'Best MLP',
+) -> None:
+    """Plot per-epoch FP/FN/TP and loss for the best model (2x2 figure).
+
+    Top-left: FP vs Epoch (train + test)
+    Top-right: FN vs Epoch (train + test)
+    Bottom-left: TP vs Epoch (train + test)
+    Bottom-right: Loss vs Epoch
+
+    Args:
+        result: Single run result dict with 'epoch_metrics' and 'loss_history'.
+        out_path: Output image path.
+        title_prefix: Prefix for the suptitle (e.g. 'Best MLP', 'Best TabPFN').
+    """
+    em = result.get('epoch_metrics')
+    lh = result.get('loss_history', [])
+    if not em or not lh:
+        print(f'  No epoch_metrics for run {result.get("run_id")} -- skipping metrics plot.')
+        return
+
+    n_epochs = len(lh)
+    epochs = range(1, n_epochs + 1)
+
+    run_id = result.get('run_id', '?')
+    te = result.get('test', {})
+    run_label = f'Run {run_id}'
+    if 'layers' in result:
+        run_label += f' | {"x".join(str(h) for h in result["layers"])}'
+    if 'loss' in result:
+        run_label += f' | {result["loss"]}'
+
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig.suptitle(
+        f'{title_prefix} — Per-Epoch Metrics ({run_label})',
+        fontsize=18, fontweight='bold')
+
+    # Top-left: FP vs Epoch
+    ax = axes[0, 0]
+    ax.plot(epochs, em['train_FP'], 'b-', linewidth=1.5, alpha=0.8, label='Train FP')
+    ax.plot(epochs, em['test_FP'], 'r-', linewidth=1.5, alpha=0.8, label='Test FP')
+    ax.set_xlabel('Epoch', fontsize=14)
+    ax.set_ylabel('False Positives', fontsize=14)
+    ax.set_title('FP vs Epoch', fontsize=16, fontweight='bold')
+    ax.legend(fontsize=12)
+    ax.tick_params(labelsize=12)
+    ax.grid(True, alpha=0.3)
+
+    # Top-right: FN vs Epoch
+    ax = axes[0, 1]
+    ax.plot(epochs, em['train_FN'], 'b-', linewidth=1.5, alpha=0.8, label='Train FN')
+    ax.plot(epochs, em['test_FN'], 'r-', linewidth=1.5, alpha=0.8, label='Test FN')
+    ax.set_xlabel('Epoch', fontsize=14)
+    ax.set_ylabel('False Negatives', fontsize=14)
+    ax.set_title('FN vs Epoch', fontsize=16, fontweight='bold')
+    ax.legend(fontsize=12)
+    ax.tick_params(labelsize=12)
+    ax.grid(True, alpha=0.3)
+
+    # Bottom-left: TP vs Epoch
+    ax = axes[1, 0]
+    ax.plot(epochs, em['train_TP'], 'b-', linewidth=1.5, alpha=0.8, label='Train TP')
+    ax.plot(epochs, em['test_TP'], 'r-', linewidth=1.5, alpha=0.8, label='Test TP')
+    ax.set_xlabel('Epoch', fontsize=14)
+    ax.set_ylabel('True Positives', fontsize=14)
+    ax.set_title('TP vs Epoch', fontsize=16, fontweight='bold')
+    ax.legend(fontsize=12)
+    ax.tick_params(labelsize=12)
+    ax.grid(True, alpha=0.3)
+
+    # Bottom-right: Loss vs Epoch
+    ax = axes[1, 1]
+    ax.plot(epochs, lh, 'k-', linewidth=1.5, alpha=0.8, label='Training Loss')
+    ax.set_xlabel('Epoch', fontsize=14)
+    ax.set_ylabel('Loss', fontsize=14)
+    ax.set_title('Loss vs Epoch', fontsize=16, fontweight='bold')
+    ax.set_yscale('log')
+    ax.legend(fontsize=12)
+    ax.tick_params(labelsize=12)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(out_path) or '.', exist_ok=True)
+    plt.savefig(out_path, dpi=200, bbox_inches='tight')
+    print(f'  Saved {out_path}')
+    plt.close()

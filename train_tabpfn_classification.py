@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import csv
 import itertools
 import os
 import shutil
@@ -484,6 +485,19 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
 
         save_incremental(results, cfg, config_path, results_path)
 
+        # Checkpoint cleanup: keep only best + currently running
+        current_best = min(results,
+                           key=lambda r: r['test']['FP'] + r['test']['FN'])
+        best_so_far_path = 'checkpoint/fire_detector_tabpfn_best.pt'
+        if result['run_id'] == current_best['run_id']:
+            shutil.copy2(ckpt_path, best_so_far_path)
+        for r in results:
+            r_path = r.get('checkpoint', '')
+            if (r['run_id'] != current_best['run_id']
+                    and r_path and r_path != best_so_far_path
+                    and os.path.isfile(r_path)):
+                os.remove(r_path)
+
         print(f'  Train: TP={train_metrics["TP"]:,} FP={train_metrics["FP"]:,} '
               f'FN={train_metrics["FN"]:,} TN={train_metrics["TN"]:,}')
         print(f'  Test:  TP={test_metrics["TP"]:,} FP={test_metrics["FP"]:,} '
@@ -554,6 +568,45 @@ def write_best_model_config(best: dict[str, Any], checkpoint_path: str,
     return config_path
 
 
+def write_results_csv(results: list[dict[str, Any]],
+                      csv_path: str = 'results/grid_search_tabpfn_classification_summary.csv',
+                      ) -> str:
+    """Write a CSV summary of all grid search runs for easy sorting/comparison."""
+    os.makedirs(os.path.dirname(csv_path) or '.', exist_ok=True)
+    fieldnames = [
+        'run_id', 'learning_rate', 'batch_size', 'n_estimators',
+        'weight_decay', 'grad_clip_norm', 'epochs_completed',
+        'train_TP', 'train_FP', 'train_FN',
+        'test_TP', 'test_FP', 'test_FN',
+        'error_rate', 'precision', 'recall',
+    ]
+    with open(csv_path, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in sorted(results, key=lambda x: x['run_id']):
+            tr = r['train']
+            te = r['test']
+            writer.writerow({
+                'run_id': r['run_id'],
+                'learning_rate': r['learning_rate'],
+                'batch_size': r['batch_size'],
+                'n_estimators': r['n_estimators'],
+                'weight_decay': r['weight_decay'],
+                'grad_clip_norm': r['grad_clip_norm'],
+                'epochs_completed': r['epochs_completed'],
+                'train_TP': int(tr['TP']),
+                'train_FP': int(tr['FP']),
+                'train_FN': int(tr['FN']),
+                'test_TP': int(te['TP']),
+                'test_FP': int(te['FP']),
+                'test_FN': int(te['FN']),
+                'error_rate': f'{r["error_rate"]:.6f}',
+                'precision': f'{te["precision"]:.6f}',
+                'recall': f'{te["recall"]:.6f}',
+            })
+    return csv_path
+
+
 # ── Main ──────────────────────────────────────────────────────
 
 
@@ -569,13 +622,15 @@ def main() -> None:
     print('=' * 60)
     print('ML Fire Detection \u2014 TabPFN Classification Training')
     print('=' * 60)
-    print('\n--- Loading flight data ---')
-    flights = group_files_by_flight()
-    flight_features = load_all_data(flights)
-
     config_path = args.config
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
+
+    data_dir = cfg.get('data_dir', 'ignite_fire_data')
+    print('\n--- Loading flight data ---')
+    print(f'  Data directory: {data_dir}')
+    flights = group_files_by_flight(data_dir)
+    flight_features = load_all_data(flights)
 
     combos = build_combos(cfg)
     metric = cfg.get('metric', 'error_rate')
@@ -589,24 +644,33 @@ def main() -> None:
 
     print_results_table(results, metric)
 
-    best = min(results, key=lambda r: r.get(metric, float('inf')))
+    # CSV summary for easy sorting and comparison
+    csv_path = 'results/grid_search_tabpfn_classification_summary.csv'
+    write_results_csv(results, csv_path)
+    print(f'\n  CSV summary: {csv_path}')
+
+    # Select best model: minimize FP+FN
+    best = min(results, key=lambda r: r['test']['FP'] + r['test']['FN'])
     best_ckpt = best['checkpoint']
     best_path = 'checkpoint/fire_detector_tabpfn_best.pt'
-    shutil.copy2(best_ckpt, best_path)
+    if os.path.isfile(best_ckpt):
+        shutil.copy2(best_ckpt, best_path)
 
     model_config_path = 'configs/best_model_tabpfn_classification.yaml'
     write_best_model_config(best, best_path, model_config_path)
 
+    te = best['test']
     print(f'\n{"=" * 60}')
-    print(f'Best run: #{best["run_id"]}')
+    print(f'Best run: #{best["run_id"]}  (lowest FP+FN = {te["FP"] + te["FN"]:.0f})')
     print(f'  LR:              {best["learning_rate"]}')
     print(f'  Batch size:      {best["batch_size"]}')
     print(f'  n_estimators:    {best["n_estimators"]}')
     print(f'  Weight decay:    {best["weight_decay"]}')
     print(f'  Grad clip:       {best["grad_clip_norm"]}')
+    print(f'  Test TP={te["TP"]:.0f}  FP={te["FP"]:.0f}  FN={te["FN"]:.0f}')
     print(f'  Error rate:      {best["error_rate"]:.4f}')
-    print(f'  Precision:       {best["test"]["precision"]:.4f}')
-    print(f'  Recall:          {best["test"]["recall"]:.4f}')
+    print(f'  Precision:       {te["precision"]:.4f}')
+    print(f'  Recall:          {te["recall"]:.4f}')
     print(f'\n  Best model:  {best_path}')
     print(f'  Config:      {model_config_path}')
     print(f'  Results:     {results_path}')

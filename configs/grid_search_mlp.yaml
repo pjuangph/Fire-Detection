@@ -16,6 +16,8 @@
 #   Combined:         2 layers x 2 LR x 2 params x 2 dropout  = 16
 #   Total: 144 runs
 
+data_dir: /Volumes/fire_dev/challenge_data/data
+
 epochs: 100
 batch_size: 4096
 save_every: 25              # save checkpoint every N epochs for crash recovery
