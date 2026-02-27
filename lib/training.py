@@ -17,6 +17,9 @@ from sklearn.preprocessing import StandardScaler
 from lib import group_files_by_flight, compute_grid_extent, build_pixel_table
 from lib.features import build_location_features
 from lib.losses import compute_pixel_weights
+from lib.constants import (
+    T_IGNITION_DRY_WOOD, THERMAL_FEATURE_INDICES, NON_THERMAL_FEATURE_INDICES,
+)
 
 # Type aliases
 NDArrayFloat = npt.NDArray[np.floating[Any]]
@@ -227,12 +230,21 @@ def make_splitter(test_size: float = 0.2, seed: int = 0) -> Any:
 def prepare_tabpfn_dataset(
     flight_features: FlightFeatures,
     gt_flight: str = '24-801-03',
+    T_ignition: float = T_IGNITION_DRY_WOOD,
 ) -> tuple[NDArrayFloat, NDArrayFloat, StandardScaler]:
     """Build merged dataset for TabPFN training with GT flight forced to no-fire.
 
+    Uses hybrid normalization: thermal features (indices 0-3) are divided by
+    T_ignition; non-thermal features (indices 4-11) use StandardScaler fit
+    on the ground-truth flight.
+
     Returns:
-        Tuple of (X_norm, y, scaler) where X_norm is scaled and NaN-cleaned.
+        Tuple of (X_norm, y, scaler) where X_norm is hybrid-normalized
+        and NaN-cleaned.
     """
+    therm_idx = THERMAL_FEATURE_INDICES
+    non_therm_idx = NON_THERMAL_FEATURE_INDICES
+
     X_parts, y_parts = [], []
     for fnum, ff in flight_features.items():
         X_parts.append(ff['X'])
@@ -243,14 +255,18 @@ def prepare_tabpfn_dataset(
     X_all = np.concatenate(X_parts)
     y_all = np.concatenate(y_parts)
 
-    # Fit scaler on ground-truth flight only (pre-burn = "normal" baseline)
+    # Fit scaler on ground-truth flight non-thermal features only
     gt_X = flight_features[gt_flight]['X']
     gt_X_clean = np.where(np.isfinite(gt_X), gt_X, 0.0).astype(np.float32)
     scaler = StandardScaler()
-    scaler.fit(gt_X_clean)
+    scaler.fit(gt_X_clean[:, non_therm_idx])
 
     X_clean = np.where(np.isfinite(X_all), X_all, 0.0).astype(np.float32)
-    X_norm = scaler.transform(X_clean).astype(np.float32)
+    X_norm = np.empty_like(X_clean)
+    X_norm[:, therm_idx] = X_clean[:, therm_idx] / T_ignition
+    X_norm[:, non_therm_idx] = scaler.transform(
+        X_clean[:, non_therm_idx]).astype(np.float32)
+
     y = y_all.astype(np.float32)
     return X_norm, y, scaler
 

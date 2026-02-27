@@ -40,6 +40,7 @@ from lib.training import (
     compute_error_rate, coerce_metrics,
     FlightFeatures,
 )
+from lib.constants import THERMAL_FEATURE_INDICES, NON_THERMAL_FEATURE_INDICES
 
 # Type aliases
 NDArrayFloat = npt.NDArray[np.floating[Any]]
@@ -365,11 +366,17 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
               f'{n_resume} under-trained (will resume), '
               f'{len(combos) - len(existing_by_key)} new')
 
-    # Fit scaler on ground-truth flight only (pre-burn = "normal" baseline)
+    # Hybrid normalization:
+    #   Thermal features (indices 0-3): divide by T_ignition (physics-based)
+    #   Non-thermal features (indices 4-11): StandardScaler fit on GT flight
+    T_ign = cfg.get('T_ignition', 300.0) + 273.15  # YAML is °C, internal is K
+    therm_idx = THERMAL_FEATURE_INDICES      # [0, 1, 2, 3]
+    non_therm_idx = NON_THERMAL_FEATURE_INDICES  # [4, 5, 6, 7, 8, 9, 10, 11]
+
     gt_X = flight_features['24-801-03']['X']
     gt_X_clean = np.where(np.isfinite(gt_X), gt_X, 0.0).astype(np.float32)
     scaler = StandardScaler()
-    scaler.fit(gt_X_clean)
+    scaler.fit(gt_X_clean[:, non_therm_idx])  # fit only on non-thermal columns
 
     os.makedirs('checkpoint', exist_ok=True)
     results: list[dict[str, Any]] = [
@@ -453,10 +460,16 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         P_total = float(y_ready.sum())  # After oversampling
 
         X_clean = np.where(np.isfinite(X_ready), X_ready, 0.0).astype(np.float32)
-        X_norm = scaler.transform(X_clean).astype(np.float32)
+        X_norm = np.empty_like(X_clean)
+        X_norm[:, therm_idx] = X_clean[:, therm_idx] / T_ign
+        X_norm[:, non_therm_idx] = scaler.transform(
+            X_clean[:, non_therm_idx]).astype(np.float32)
 
         X_test_clean = np.where(np.isfinite(X_test), X_test, 0.0).astype(np.float32)
-        X_test_norm = scaler.transform(X_test_clean).astype(np.float32)
+        X_test_norm = np.empty_like(X_test_clean)
+        X_test_norm[:, therm_idx] = X_test_clean[:, therm_idx] / T_ign
+        X_test_norm[:, non_therm_idx] = scaler.transform(
+            X_test_clean[:, non_therm_idx]).astype(np.float32)
 
         train_result = train_model(
             X_norm, y_ready, w_ready,
@@ -473,7 +486,10 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         epochs_completed = train_result['epochs_completed']
 
         X_train_eval = np.where(np.isfinite(X_train), X_train, 0.0).astype(np.float32)
-        X_train_norm = scaler.transform(X_train_eval).astype(np.float32)
+        X_train_norm = np.empty_like(X_train_eval)
+        X_train_norm[:, therm_idx] = X_train_eval[:, therm_idx] / T_ign
+        X_train_norm[:, non_therm_idx] = scaler.transform(
+            X_train_eval[:, non_therm_idx]).astype(np.float32)
         train_metrics, _ = evaluate(model, X_train_norm, y_train)
         test_metrics, _ = evaluate(model, X_test_norm, y_test)
 
@@ -502,6 +518,8 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             'mean': scaler.mean_,
             'std': scaler.scale_,
             'scaler': scaler,
+            'T_ignition': T_ign,
+            'normalization': 'hybrid',  # thermal/T_ign + scaler on non-thermal
             'n_features': 12,
             'hidden_layers': model.hidden_layers,
             'dropout': dp,
@@ -611,6 +629,7 @@ def write_best_model_config(best: dict[str, Any], checkpoint_path: str,
         'model_type': 'firemlp',
         'checkpoint': checkpoint_path,
         'threshold': 0.5,
+        'T_ignition': 300,  # [°C]
         'training': {
             'loss': best['loss'],
             'layers': best['layers'],

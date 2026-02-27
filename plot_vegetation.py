@@ -50,7 +50,7 @@ def plot_vegetation_flight(mosaic, flight_num, comment, n_files):
     # --- Top-left: NDVI map ---
     ax = axes[0, 0]
     im = ax.imshow(grid_NDVI, extent=extent, aspect='equal',
-                   cmap='RdYlGn', vmin=0.0, vmax=0.4)
+                   cmap='winter', vmin=0.0, vmax=0.4)
     ax.set_title('NDVI (Vegetation Index)', fontsize=18, fontweight='bold')
     cb = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     cb.set_label('NDVI', fontsize=14)
@@ -73,14 +73,14 @@ def plot_vegetation_flight(mosaic, flight_num, comment, n_files):
     # --- Top-right: NDVI + fire overlay ---
     ax = axes[0, 1]
     ax.imshow(grid_NDVI, extent=extent, aspect='equal',
-              cmap='RdYlGn', vmin=0.0, vmax=0.4)
+              cmap='winter', vmin=0.0, vmax=0.4)
     fire_count = np.sum(grid_fire)
     if fire_count > 0:
         fire_rows, fire_cols = np.where(grid_fire)
         fire_lats = lat_axis[0] + (lat_axis[-1] - lat_axis[0]) * fire_rows / (len(lat_axis) - 1)
         fire_lons = lon_axis[0] + (lon_axis[-1] - lon_axis[0]) * fire_cols / (len(lon_axis) - 1)
         ax.scatter(fire_lons, fire_lats, s=2, c='red', alpha=0.8,
-                   edgecolors='black', linewidths=0.2,
+                   edgecolors='darkred', linewidths=0.2,
                    label=f'Fire ({fire_count:,} cells)')
         ax.legend(loc='upper right', markerscale=15, fontsize=14)
 

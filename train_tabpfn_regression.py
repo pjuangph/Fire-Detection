@@ -407,7 +407,9 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
               f'{n_resume} under-trained (will resume), '
               f'{len(combos) - len(existing_by_key)} new')
 
-    X_norm, y_norm, scaler = prepare_tabpfn_dataset(flight_features)
+    T_ign = cfg.get('T_ignition', 300.0) + 273.15  # YAML is °C, internal is K
+    X_norm, y_norm, scaler = prepare_tabpfn_dataset(
+        flight_features, T_ignition=T_ign)
     print(f'  Dataset: {len(y_norm):,} samples '
           f'({int(y_norm.sum()):,} fire / {int((y_norm == 0).sum()):,} no-fire)')
     print(f'  (oversampling applied inside train split only)')
@@ -492,6 +494,8 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             'context_X': ctx_X,
             'context_y': ctx_y,
             'scaler': scaler,
+            'T_ignition': T_ign,
+            'normalization': 'hybrid',
             'threshold': 0.5,
             'feature_names': FEATURE_NAMES,
             'n_estimators': n_est,
@@ -578,6 +582,7 @@ def write_best_model_config(best: dict[str, Any], checkpoint_path: str,
         'model_type': 'tabpfn_regression',
         'checkpoint': checkpoint_path,
         'threshold': 0.5,
+        'T_ignition': 300,  # [°C]
         'training': {
             'learning_rate': best['learning_rate'],
             'batch_size': best['batch_size'],

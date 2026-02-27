@@ -340,6 +340,8 @@ def create_presentation():
         'running accumulators track max, sum, count',
         'Multi-pass consistency filter: require fire in \u22652 passes '
         '(52% FP reduction on pre-burn flight)',
+        'Hybrid normalization: thermal features (T4, T11, \u0394T) / 573 K '
+        '(dry wood ignition); non-thermal features z-scored against pre-burn baseline',
         'Result: one row per grid cell with 12 features \u2192 ready for ML or threshold detection',
     ], font_size=16, color=DARK_TEXT, spacing=Pt(8))
 

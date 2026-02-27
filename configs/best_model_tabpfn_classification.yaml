@@ -2,6 +2,7 @@ detector: tabpfn_classification
 model_type: tabpfn
 checkpoint: checkpoint/fire_detector_tabpfn_best.pt
 threshold: 0.5
+T_ignition: 300    # [°C]
 training:
   batch_size: 1024
   n_estimators: 2

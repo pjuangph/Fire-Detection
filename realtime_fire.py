@@ -73,7 +73,7 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
     if has_vnir:
         display_ndvi = compute_ndvi(gs['Red'], gs['NIR'])
         bg = ax.imshow(display_ndvi, extent=extent, aspect='equal',
-                       cmap='RdYlGn', vmin=0.0, vmax=0.4)
+                       cmap='winter', vmin=0.0, vmax=0.4)
         cbar = plt.colorbar(bg, ax=ax, fraction=0.03, pad=0.02)
         cbar.set_label('NDVI', fontsize=18)
         cbar.ax.tick_params(labelsize=18)
@@ -99,7 +99,7 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
         fire_lats = lat_axis[0] + (lat_axis[-1] - lat_axis[0]) * fire_rows / max(len(lat_axis) - 1, 1)
         fire_lons = lon_axis[0] + (lon_axis[-1] - lon_axis[0]) * fire_cols / max(len(lon_axis) - 1, 1)
         ax.scatter(fire_lons, fire_lats, s=6, c='red', alpha=0.9,
-                   edgecolors='black', linewidths=0.3, zorder=5)
+                   edgecolors='darkred', linewidths=0.3, zorder=5)
 
         # Vegetation-confirmed fire pixels in orange
         if 'veg_confirmed' in gs:
@@ -109,8 +109,8 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
                 vf_rows, vf_cols = np.where(veg_fire)
                 vf_lats = lat_axis[0] + (lat_axis[-1] - lat_axis[0]) * vf_rows / max(len(lat_axis) - 1, 1)
                 vf_lons = lon_axis[0] + (lon_axis[-1] - lon_axis[0]) * vf_cols / max(len(lon_axis) - 1, 1)
-                ax.scatter(vf_lons, vf_lats, s=6, c='#FF00FF', alpha=0.9,
-                           edgecolors='black', linewidths=0.3, zorder=6)
+                ax.scatter(vf_lons, vf_lats, s=6, c='red', alpha=0.9,
+                           edgecolors='darkred', linewidths=0.3, zorder=6)
 
         # Bounding boxes around top 3 fire zones with ID at lower-right
         for zone_id, size in zone_sizes[:3]:
@@ -129,7 +129,7 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
             box_h = abs(lat_bot - lat_top)
             ax.add_patch(Rectangle(
                 (box_x, box_y), box_w, box_h,
-                linewidth=3, edgecolor='black', facecolor='none',
+                linewidth=3, edgecolor='yellow', facecolor='none',
                 linestyle='-', zorder=8))
 
             # Zone ID label at lower-right corner
@@ -163,9 +163,9 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
                 f'  Zone {zone_id}: {format_area(size * cell_area_m2)} '
                 f'({size:,} px)')
 
-    ax.text(0.98, 0.02, '\n'.join(stats_lines),
+    ax.text(0.02, 0.02, '\n'.join(stats_lines),
             transform=ax.transAxes, fontsize=18,
-            verticalalignment='bottom', horizontalalignment='right',
+            verticalalignment='bottom', horizontalalignment='left',
             family='monospace',
             bbox=dict(boxstyle='round', facecolor='white',
                       alpha=0.92, edgecolor='gray'))
@@ -181,6 +181,14 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
     ax.set_title(
         f'Real-Time Fire Detection [{det_label}] \u2014 Flight {flight_num}\n{comment}',
         fontsize=18, fontweight='bold')
+
+    # Model label in top-right corner (visible in side-by-side comparisons)
+    ax.text(0.98, 0.97, det_label,
+            transform=ax.transAxes, fontsize=20, fontweight='bold',
+            verticalalignment='top', horizontalalignment='right',
+            bbox=dict(boxstyle='round', facecolor='white',
+                      alpha=0.92, edgecolor='gray'))
+
     ax.set_xlabel('Longitude', fontsize=18)
     ax.set_ylabel('Latitude', fontsize=18)
     ax.tick_params(labelsize=18)
@@ -188,9 +196,9 @@ def render_frame(gs: dict[str, Any], fire_mask: np.ndarray,
     # Legend for fire overlay colors
     legend_elements = [
         Line2D([0], [0], marker='o', color='w', markerfacecolor='red',
-               markeredgecolor='black', markersize=10, label='Thermal fire'),
-        Line2D([0], [0], marker='o', color='w', markerfacecolor='#FF00FF',
-               markeredgecolor='black', markersize=10, label='Veg-confirmed fire'),
+               markeredgecolor='darkred', markersize=10, label='Thermal fire'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='red',
+               markeredgecolor='darkred', markersize=10, label='Veg-confirmed fire'),
     ]
     ax.legend(handles=legend_elements, loc='upper center',
               bbox_to_anchor=(0.5, -0.04), ncol=2, fontsize=16,

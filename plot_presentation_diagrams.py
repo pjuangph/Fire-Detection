@@ -367,7 +367,7 @@ def plot_model_comparison():
 
 def plot_threshold_explanation():
     """Explain how the traditional T4-T11 threshold fire detection works."""
-    fig, ax = plt.subplots(1, 1, figsize=(22, 11))
+    fig, ax = plt.subplots(1, 1, figsize=(16, 12))
     fig.suptitle('Traditional Fire Detection: The T4 – T11 Method\n'
                  '"If it\'s hot AND hotter than its surroundings → probably fire"',
                  fontsize=26, fontweight='bold', y=0.98)

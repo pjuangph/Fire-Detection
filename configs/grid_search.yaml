@@ -9,6 +9,7 @@
 # Grid size: BCE 3x3x3=27 + Error-rate 3x3=9 = 36 total runs.
 
 data_dir: ignite_fire_data
+T_ignition: 300               # dry wood ignition temp [°C] for thermal normalization
 
 epochs: 120
 batch_size: 4096

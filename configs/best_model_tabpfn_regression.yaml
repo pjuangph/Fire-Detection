@@ -2,6 +2,7 @@ detector: tabpfn_regression
 model_type: tabpfn_regression
 checkpoint: checkpoint/fire_detector_tabpfn_regression_best.pt
 threshold: 0.5
+T_ignition: 300    # [°C]
 training:
   batch_size: 1024
   n_estimators: 1
