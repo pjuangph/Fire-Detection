@@ -8,7 +8,7 @@
 #
 # Grid size: 1 run (single default config).
 
-data_dir: /Volumes/fire_dev/challenge_data/data
+data_dir: ignite_fire_data
 
 epochs: 30
 metric: error_rate          # minimize (FN+FP)/P on test set
