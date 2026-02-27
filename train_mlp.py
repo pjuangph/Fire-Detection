@@ -554,13 +554,6 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         if result['run_id'] == current_best['run_id']:
             shutil.copy2(ckpt_path, best_so_far_path)
 
-        # Delete non-best completed run checkpoints
-        for r in results:
-            r_path = r.get('checkpoint', '')
-            if (r['run_id'] != current_best['run_id']
-                    and r_path and r_path != best_so_far_path
-                    and os.path.isfile(r_path)):
-                os.remove(r_path)
 
         print(f'  Train: TP={train_metrics["TP"]:,} FP={train_metrics["FP"]:,} '
               f'FN={train_metrics["FN"]:,} TN={train_metrics["TN"]:,}')
