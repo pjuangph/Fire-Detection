@@ -82,6 +82,7 @@ def compare_detectors(
     threshold: float = 0.5,
     model_label: str = 'ML',
     T_ignition: float = 573.0,
+    normalization: str = 'hybrid',
 ) -> None:
     """Compare ML detector vs detect_fire_simple for every flight.
 
@@ -136,7 +137,8 @@ def compare_detectors(
 
         # ML predictions
         ml_fire, probs = predict(model, scaler, X, threshold=threshold,
-                                 T_ignition=T_ignition)
+                                 T_ignition=T_ignition,
+                                 normalization=normalization)
 
         n_locs = len(gt)
         n_gt = int(gt_fire.sum())
@@ -222,13 +224,14 @@ def main() -> None:
         label = loss_name.upper().replace('ERROR-RATE', 'ER')
 
         print(f'\nLoading {model_path}...')
-        model, scaler, T_ignition = load_model(model_path)
+        model, scaler, T_ignition, normalization = load_model(model_path)
         print(f'  Model: {sum(p.numel() for p in model.parameters()):,} params')
+        print(f'  Normalization: {normalization}')
 
         compare_detectors(
             flight_features, model, scaler,
             threshold=args.threshold, model_label=label,
-            T_ignition=T_ignition)
+            T_ignition=T_ignition, normalization=normalization)
 
 
 if __name__ == '__main__':

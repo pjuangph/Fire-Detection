@@ -26,21 +26,26 @@ FEATURE_NAMES = [
 ]
 
 
-def _hybrid_normalize(
+def _apply_normalization(
     X: NDArrayFloat,
     scaler: StandardScaler,
     T_ignition: float = T_IGNITION_DRY_WOOD,
+    normalization: str = 'hybrid',
 ) -> NDArrayFloat:
-    """Apply hybrid normalization: thermal / T_ignition, non-thermal via scaler.
+    """Apply normalization to clean feature array.
 
     Args:
         X: Clean feature array (N, 12), NaN already replaced with 0.
-        scaler: StandardScaler fitted on non-thermal features (8 cols).
-        T_ignition: Ignition temperature for thermal normalization.
+        scaler: Fitted StandardScaler (8 cols for hybrid, 12 cols for standard).
+        T_ignition: Ignition temperature for hybrid thermal normalization.
+        normalization: 'hybrid' or 'standard'.
 
     Returns:
         Normalized feature array (N, 12).
     """
+    if normalization == 'standard':
+        return scaler.transform(X).astype(np.float32)
+    # hybrid: thermal / T_ignition, non-thermal via scaler
     X_norm = np.empty_like(X)
     X_norm[:, THERMAL_FEATURE_INDICES] = X[:, THERMAL_FEATURE_INDICES] / T_ignition
     X_norm[:, NON_THERMAL_FEATURE_INDICES] = scaler.transform(
@@ -50,15 +55,15 @@ def _hybrid_normalize(
 
 def load_model(
     model_path: str = 'checkpoint/fire_detector.pt',
-) -> tuple[FireMLP, StandardScaler, float]:
-    """Load trained model, scaler, and T_ignition from checkpoint.
+) -> tuple[FireMLP, StandardScaler, float, str]:
+    """Load trained model, scaler, T_ignition, and normalization from checkpoint.
 
     Args:
         model_path (str): Path to checkpoint file.
 
     Returns:
-        tuple[FireMLP, StandardScaler, float]: Loaded model, fitted scaler,
-            and T_ignition value.
+        tuple[FireMLP, StandardScaler, float, str]: Loaded model, fitted scaler,
+            T_ignition value, and normalization type ('hybrid' or 'standard').
 
     Raises:
         FileNotFoundError: If checkpoint file does not exist.
@@ -81,8 +86,9 @@ def load_model(
         scaler.n_features_in_ = len(checkpoint['mean'])
 
     T_ignition = checkpoint.get('T_ignition', T_IGNITION_DRY_WOOD)
+    normalization = checkpoint.get('normalization', 'hybrid')
 
-    return model, scaler, T_ignition
+    return model, scaler, T_ignition, normalization
 
 
 def predict(
@@ -91,22 +97,24 @@ def predict(
     X: NDArrayFloat,
     threshold: float = 0.5,
     T_ignition: float = T_IGNITION_DRY_WOOD,
+    normalization: str = 'hybrid',
 ) -> tuple[NDArrayFloat, NDArrayFloat]:
-    """Run inference on feature matrix with hybrid normalization.
+    """Run inference on feature matrix.
 
     Args:
         model (FireMLP): Trained model.
-        scaler (StandardScaler): Fitted scaler for non-thermal features.
+        scaler (StandardScaler): Fitted scaler.
         X (NDArrayFloat): Raw feature array of shape (N, 12).
         threshold (float): Classification threshold. Default 0.5.
-        T_ignition (float): Ignition temperature for thermal normalization.
+        T_ignition (float): Ignition temperature for hybrid normalization.
+        normalization (str): 'hybrid' or 'standard'.
 
     Returns:
         tuple[NDArrayFloat, NDArrayFloat]: (predictions, probabilities) where
             predictions is bool array and probabilities is float array.
     """
     X_clean = np.where(np.isfinite(X), X, 0.0).astype(np.float32)
-    X_norm = _hybrid_normalize(X_clean, scaler, T_ignition)
+    X_norm = _apply_normalization(X_clean, scaler, T_ignition, normalization)
 
     model.eval()
     with torch.no_grad():
@@ -201,12 +209,14 @@ class _MLFireDetector:
             self.scaler.var_ = ckpt['std'] ** 2
             self.scaler.n_features_in_ = len(ckpt['mean'])
         self.T_ignition = ckpt.get('T_ignition', T_IGNITION_DRY_WOOD)
+        self.normalization = ckpt.get('normalization', 'hybrid')
         self.threshold = threshold if threshold is not None else ckpt.get('threshold', 0.5)
 
     def _normalize(self, features: np.ndarray) -> np.ndarray:
-        """Apply hybrid normalization to raw features."""
+        """Apply normalization to raw features."""
         x = np.where(np.isfinite(features), features, 0.0).astype(np.float32)
-        return _hybrid_normalize(x, self.scaler, self.T_ignition)
+        return _apply_normalization(x, self.scaler, self.T_ignition,
+                                    self.normalization)
 
     def predict_from_gs(self, gs: dict[str, Any]) -> np.ndarray:
         """Compute aggregate features from gs accumulators, run MLP.
@@ -272,6 +282,7 @@ class _TabPFNFireDetector:
         self.model = ckpt['model']
         self.scaler = ckpt['scaler']
         self.T_ignition = ckpt.get('T_ignition', T_IGNITION_DRY_WOOD)
+        self.normalization = ckpt.get('normalization', 'hybrid')
         self.threshold = threshold if threshold is not None else ckpt.get('threshold', 0.5)
 
     def _load_from_scratch(self, model_path: str, threshold: float | None) -> None:
@@ -287,6 +298,7 @@ class _TabPFNFireDetector:
 
         self.scaler = ckpt['scaler']
         self.T_ignition = ckpt.get('T_ignition', T_IGNITION_DRY_WOOD)
+        self.normalization = ckpt.get('normalization', 'hybrid')
         self.threshold = threshold if threshold is not None else ckpt.get('threshold', 0.5)
 
         # Reconstruct classifier with random weights, then load trained weights
@@ -329,7 +341,7 @@ class _TabPFNFireDetector:
             return fire_mask
 
         X = np.where(np.isfinite(features), features, 0.0).astype(np.float32)
-        X = _hybrid_normalize(X, self.scaler, self.T_ignition)
+        X = _apply_normalization(X, self.scaler, self.T_ignition, self.normalization)
         probs = self._batched_predict_proba(X)
 
         fire_mask[valid_mask] = probs >= self.threshold
@@ -344,7 +356,7 @@ class _TabPFNFireDetector:
             return prob_grid
 
         X = np.where(np.isfinite(features), features, 0.0).astype(np.float32)
-        X = _hybrid_normalize(X, self.scaler, self.T_ignition)
+        X = _apply_normalization(X, self.scaler, self.T_ignition, self.normalization)
         probs = self._batched_predict_proba(X)
 
         prob_grid[valid_mask] = probs
@@ -373,6 +385,7 @@ class _TabPFNRegressionDetector:
 
         self.scaler = ckpt['scaler']
         self.T_ignition = ckpt.get('T_ignition', T_IGNITION_DRY_WOOD)
+        self.normalization = ckpt.get('normalization', 'hybrid')
         self.threshold = threshold if threshold is not None else ckpt.get('threshold', 0.5)
 
         # Reconstruct regressor with random weights, then load trained weights
@@ -415,7 +428,7 @@ class _TabPFNRegressionDetector:
             return fire_mask
 
         X = np.where(np.isfinite(features), features, 0.0).astype(np.float32)
-        X = _hybrid_normalize(X, self.scaler, self.T_ignition)
+        X = _apply_normalization(X, self.scaler, self.T_ignition, self.normalization)
         probs = np.clip(self._batched_predict(X), 0.0, 1.0)
 
         fire_mask[valid_mask] = probs >= self.threshold
@@ -430,7 +443,7 @@ class _TabPFNRegressionDetector:
             return prob_grid
 
         X = np.where(np.isfinite(features), features, 0.0).astype(np.float32)
-        X = _hybrid_normalize(X, self.scaler, self.T_ignition)
+        X = _apply_normalization(X, self.scaler, self.T_ignition, self.normalization)
         probs = np.clip(self._batched_predict(X), 0.0, 1.0)
 
         prob_grid[valid_mask] = probs

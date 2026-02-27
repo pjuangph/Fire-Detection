@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import csv
 import itertools
+import json
 import os
 import shutil
 from typing import Any
@@ -71,6 +72,7 @@ def train_model(
     save_every: int = 25,
     X_test: NDArrayFloat | None = None,
     y_test: NDArrayFloat | None = None,
+    force_cpu: bool = False,
 ) -> TrainResult:
     """Train FireMLP with the selected loss function.
 
@@ -85,12 +87,13 @@ def train_model(
         save_every: Save checkpoint every N epochs (default 25).
         X_test: Optional normalized test features for per-epoch evaluation.
         y_test: Optional test labels for per-epoch evaluation.
+        force_cpu: If True, train on CPU only (useful for parallel workers).
 
     Returns:
         Dict with keys: model, loss_history, epochs_completed,
         optimizer_state, scheduler_state.
     """
-    device = get_device()
+    device = get_device(force_cpu=force_cpu)
     if not quiet:
         print(f'  Device: {device}')
 
@@ -270,6 +273,7 @@ def build_combos(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     weight_configs = space.get('importance_weights', [{'gt': 10, 'fire': 5, 'other': 1}])
     dropouts = space.get('dropout', [0.0])
     grad_clips = space.get('grad_clip_norm', [1.0])
+    norms = space.get('normalization', ['hybrid'])
 
     # Loss-specific hyperparameters
     tversky_params = space.get('tversky_params', [{'alpha': 0.3, 'beta': 0.7}])
@@ -286,14 +290,15 @@ def build_combos(cfg: dict[str, Any]) -> list[dict[str, Any]]:
         loss_layers = override.get('layers', layers_list)
         loss_lrs = override.get('learning_rate', lrs)
 
-        for layers, lr, dp, gc in itertools.product(
-                loss_layers, loss_lrs, dropouts, grad_clips):
+        for layers, lr, dp, gc, norm in itertools.product(
+                loss_layers, loss_lrs, dropouts, grad_clips, norms):
             base = {
                 'loss': loss,
                 'layers': list(layers),
                 'learning_rate': lr,
                 'dropout': dp,
                 'grad_clip_norm': gc,
+                'normalization': norm,
             }
 
             if loss == 'bce':
@@ -325,20 +330,39 @@ def _combo_key(combo: dict[str, Any]) -> str:
     lk_str = '|'.join(f'{k}={v}' for k, v in sorted(lk.items())) if lk else ''
     dp = combo.get('dropout', 0.0)
     gc = combo.get('grad_clip_norm', 1.0)
+    norm = combo.get('normalization', 'hybrid')
     return (f"{combo['loss']}|{combo['layers']}|{combo['learning_rate']}"
-            f"|{wc['gt']}/{wc['fire']}/{wc['other']}|{lk_str}|dp={dp}|gc={gc}")
+            f"|{wc['gt']}/{wc['fire']}/{wc['other']}|{lk_str}|dp={dp}|gc={gc}"
+            f"|norm={norm}")
 
 
 def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
                     config_path: str = '',
                     results_path: str = 'results/grid_search_mlp_results.json',
+                    worker_id: int = 0,
+                    num_workers: int = 1,
+                    force_cpu: bool = False,
                     ) -> list[dict[str, Any]]:
     """Run all grid search combinations and return results.
 
     Supports restart: loads existing results from results_path, skips
     fully-trained combos, and resumes under-trained ones.
+
+    Args:
+        worker_id: This worker's ID (0-based). Default 0.
+        num_workers: Total parallel workers. Default 1 (sequential).
+        force_cpu: If True, train on CPU only.
     """
-    combos = build_combos(cfg)
+    all_combos = build_combos(cfg)
+    # Tag each combo with its original run_id (1-based) so checkpoint
+    # filenames stay stable across workers.
+    indexed_combos = [(i + 1, c) for i, c in enumerate(all_combos)]
+    if num_workers > 1:
+        indexed_combos = [(rid, c) for rid, c in indexed_combos
+                          if (rid - 1) % num_workers == worker_id]
+        print(f'\n  Worker {worker_id}/{num_workers}: handling '
+              f'{len(indexed_combos)}/{len(all_combos)} combos')
+    n_combos_total = len(all_combos)
     epochs = cfg.get('epochs', 100)
     batch_size = cfg.get('batch_size', 4096)
     save_every = cfg.get('save_every', 25)
@@ -354,6 +378,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             'loss_kwargs': r.get('loss_kwargs', {}),
             'dropout': r.get('dropout', 0.0),
             'grad_clip_norm': r.get('grad_clip_norm', 1.0),
+            'normalization': r.get('normalization', 'hybrid'),
         })
         existing_by_key[key] = r
 
@@ -364,29 +389,33 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
     if existing_results:
         print(f'\n  Restart: {n_skip} fully trained, '
               f'{n_resume} under-trained (will resume), '
-              f'{len(combos) - len(existing_by_key)} new')
+              f'{len(indexed_combos) - len(existing_by_key)} new')
 
-    # Hybrid normalization:
-    #   Thermal features (indices 0-3): divide by T_ignition (physics-based)
-    #   Non-thermal features (indices 4-11): StandardScaler fit on GT flight
+    # Normalization setup — prepare both scalers upfront.
+    #   hybrid:   thermal features / T_ignition, non-thermal via StandardScaler
+    #   standard: all 12 features via StandardScaler (fit on GT flight)
     T_ign = cfg.get('T_ignition', 300.0) + 273.15  # YAML is °C, internal is K
     therm_idx = THERMAL_FEATURE_INDICES      # [0, 1, 2, 3]
     non_therm_idx = NON_THERMAL_FEATURE_INDICES  # [4, 5, 6, 7, 8, 9, 10, 11]
 
     gt_X = flight_features['24-801-03']['X']
     gt_X_clean = np.where(np.isfinite(gt_X), gt_X, 0.0).astype(np.float32)
-    scaler = StandardScaler()
-    scaler.fit(gt_X_clean[:, non_therm_idx])  # fit only on non-thermal columns
+
+    # Hybrid scaler: fit only on non-thermal columns
+    hybrid_scaler = StandardScaler()
+    hybrid_scaler.fit(gt_X_clean[:, non_therm_idx])
+
+    # Standard scaler: fit on all 12 columns
+    standard_scaler = StandardScaler()
+    standard_scaler.fit(gt_X_clean)
 
     os.makedirs('checkpoint', exist_ok=True)
     results: list[dict[str, Any]] = [
         r for r in existing_results
         if r.get('epochs_completed', 0) >= epochs
     ]
-    n_combos = len(combos)
 
-    for i, combo in enumerate(combos):
-        run_id = i + 1
+    for run_id, combo in indexed_combos:
         loss = combo['loss']
         layers = combo['layers']
         lr = combo['learning_rate']
@@ -394,14 +423,21 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         loss_kwargs = combo.get('loss_kwargs', {})
         dp = combo.get('dropout', 0.0)
         gc = combo.get('grad_clip_norm', 1.0)
+        norm = combo.get('normalization', 'hybrid')
         key = _combo_key(combo)
+
+        # Select scaler based on normalization strategy
+        if norm == 'standard':
+            scaler = standard_scaler
+        else:
+            scaler = hybrid_scaler
 
         ckpt_path = f'checkpoint/fire_detector_mlp_run_{run_id:02d}.pt'
 
         # Skip fully-trained runs
         existing = existing_by_key.get(key)
         if existing and existing.get('epochs_completed', 0) >= epochs:
-            print(f'\n  Run {run_id}/{n_combos}: SKIPPED (already completed)')
+            print(f'\n  Run {run_id}/{n_combos_total}: SKIPPED (already completed)')
             continue
 
         # Check for resume checkpoint on disk
@@ -432,8 +468,8 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         if dp > 0:
             extra += f', dropout={dp}'
         print(f'\n{"=" * 60}')
-        print(f'Run {run_id}/{n_combos}: {loss}, {arch_str}, lr={lr}, '
-              f'weights=[{wt_str}]{extra}')
+        print(f'Run {run_id}/{n_combos_total}: {loss}, {arch_str}, lr={lr}, '
+              f'norm={norm}, weights=[{wt_str}]{extra}')
         print('=' * 60)
         if resume_ckpt:
             print(f'  Resuming from checkpoint ({resume_epochs}/{epochs} epochs)')
@@ -460,16 +496,20 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
         P_total = float(y_ready.sum())  # After oversampling
 
         X_clean = np.where(np.isfinite(X_ready), X_ready, 0.0).astype(np.float32)
-        X_norm = np.empty_like(X_clean)
-        X_norm[:, therm_idx] = X_clean[:, therm_idx] / T_ign
-        X_norm[:, non_therm_idx] = scaler.transform(
-            X_clean[:, non_therm_idx]).astype(np.float32)
-
         X_test_clean = np.where(np.isfinite(X_test), X_test, 0.0).astype(np.float32)
-        X_test_norm = np.empty_like(X_test_clean)
-        X_test_norm[:, therm_idx] = X_test_clean[:, therm_idx] / T_ign
-        X_test_norm[:, non_therm_idx] = scaler.transform(
-            X_test_clean[:, non_therm_idx]).astype(np.float32)
+
+        if norm == 'standard':
+            X_norm = scaler.transform(X_clean).astype(np.float32)
+            X_test_norm = scaler.transform(X_test_clean).astype(np.float32)
+        else:  # hybrid
+            X_norm = np.empty_like(X_clean)
+            X_norm[:, therm_idx] = X_clean[:, therm_idx] / T_ign
+            X_norm[:, non_therm_idx] = scaler.transform(
+                X_clean[:, non_therm_idx]).astype(np.float32)
+            X_test_norm = np.empty_like(X_test_clean)
+            X_test_norm[:, therm_idx] = X_test_clean[:, therm_idx] / T_ign
+            X_test_norm[:, non_therm_idx] = scaler.transform(
+                X_test_clean[:, non_therm_idx]).astype(np.float32)
 
         train_result = train_model(
             X_norm, y_ready, w_ready,
@@ -479,17 +519,21 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             grad_clip_norm=gc, dropout=dp,
             quiet=False, resume_from=resume_ckpt,
             save_path=ckpt_path, save_every=save_every,
-            X_test=X_test_norm, y_test=y_test)
+            X_test=X_test_norm, y_test=y_test,
+            force_cpu=force_cpu)
 
         model = train_result['model']
         loss_history = train_result['loss_history']
         epochs_completed = train_result['epochs_completed']
 
         X_train_eval = np.where(np.isfinite(X_train), X_train, 0.0).astype(np.float32)
-        X_train_norm = np.empty_like(X_train_eval)
-        X_train_norm[:, therm_idx] = X_train_eval[:, therm_idx] / T_ign
-        X_train_norm[:, non_therm_idx] = scaler.transform(
-            X_train_eval[:, non_therm_idx]).astype(np.float32)
+        if norm == 'standard':
+            X_train_norm = scaler.transform(X_train_eval).astype(np.float32)
+        else:  # hybrid
+            X_train_norm = np.empty_like(X_train_eval)
+            X_train_norm[:, therm_idx] = X_train_eval[:, therm_idx] / T_ign
+            X_train_norm[:, non_therm_idx] = scaler.transform(
+                X_train_eval[:, non_therm_idx]).astype(np.float32)
         train_metrics, _ = evaluate(model, X_train_norm, y_train)
         test_metrics, _ = evaluate(model, X_test_norm, y_test)
 
@@ -519,7 +563,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             'std': scaler.scale_,
             'scaler': scaler,
             'T_ignition': T_ign,
-            'normalization': 'hybrid',  # thermal/T_ign + scaler on non-thermal
+            'normalization': norm,
             'n_features': 12,
             'hidden_layers': model.hidden_layers,
             'dropout': dp,
@@ -542,6 +586,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             'loss_kwargs': loss_kwargs,
             'dropout': dp,
             'grad_clip_norm': gc,
+            'normalization': norm,
             'epochs_completed': epochs_completed,
             'train': coerce_metrics(train_metrics),
             'test': coerce_metrics(test_metrics),
@@ -595,8 +640,9 @@ def print_results_table(results: list[dict[str, Any]], metric: str) -> None:
     print('=' * 100)
 
     header = (f'  {"Run":>3s}  {"Loss":<16s}  {"Layers":<18s}  {"LR":>8s}  '
-              f'{"Weights":<12s}  {"Extra":<16s}  {"TP":>6s}  {"FP":>5s}  '
-              f'{"FN":>5s}  {"Prec":>6s}  {"Rec":>6s}  {"ErrRate":>7s}')
+              f'{"Norm":<8s}  {"Weights":<12s}  {"Extra":<16s}  {"TP":>6s}  '
+              f'{"FP":>5s}  {"FN":>5s}  {"Prec":>6s}  {"Rec":>6s}  '
+              f'{"ErrRate":>7s}')
     print(header)
     print('  ' + '-' * (len(header) - 2))
 
@@ -604,6 +650,7 @@ def print_results_table(results: list[dict[str, Any]], metric: str) -> None:
         wc = r['importance_weights']
         wt_str = f"{wc['gt']}/{wc['fire']}/{wc['other']}"
         layers_str = 'x'.join(str(h) for h in r['layers'])
+        norm_str = r.get('normalization', 'hybrid')
         lk = r.get('loss_kwargs', {})
         dp = r.get('dropout', 0.0)
         extra_parts = [f'{k}={v}' for k, v in sorted(lk.items())]
@@ -612,9 +659,9 @@ def print_results_table(results: list[dict[str, Any]], metric: str) -> None:
         extra_str = ','.join(extra_parts) if extra_parts else '-'
         t = r['test']
         print(f'  {r["run_id"]:>3d}  {r["loss"]:<16s}  {layers_str:<18s}  '
-              f'{r["learning_rate"]:>8.4f}  {wt_str:<12s}  {extra_str:<16s}  '
-              f'{t["TP"]:>6.0f}  {t["FP"]:>5.0f}  {t["FN"]:>5.0f}  '
-              f'{t["precision"]:>6.4f}  {t["recall"]:>6.4f}  '
+              f'{r["learning_rate"]:>8.4f}  {norm_str:<8s}  {wt_str:<12s}  '
+              f'{extra_str:<16s}  {t["TP"]:>6.0f}  {t["FP"]:>5.0f}  '
+              f'{t["FN"]:>5.0f}  {t["precision"]:>6.4f}  {t["recall"]:>6.4f}  '
               f'{r["error_rate"]:>7.4f}')
 
 
@@ -630,6 +677,7 @@ def write_best_model_config(best: dict[str, Any], checkpoint_path: str,
         'checkpoint': checkpoint_path,
         'threshold': 0.5,
         'T_ignition': 300,  # [°C]
+        'normalization': best.get('normalization', 'hybrid'),
         'training': {
             'loss': best['loss'],
             'layers': best['layers'],
@@ -666,7 +714,7 @@ def write_results_csv(results: list[dict[str, Any]],
     """Write a CSV summary of all grid search runs for easy sorting/comparison."""
     os.makedirs(os.path.dirname(csv_path) or '.', exist_ok=True)
     fieldnames = [
-        'run_id', 'loss', 'layers', 'learning_rate',
+        'run_id', 'loss', 'layers', 'learning_rate', 'normalization',
         'importance_gt', 'importance_fire', 'importance_other',
         'dropout', 'grad_clip_norm', 'epochs_completed',
         'train_TP', 'train_FP', 'train_FN',
@@ -685,6 +733,7 @@ def write_results_csv(results: list[dict[str, Any]],
                 'loss': r['loss'],
                 'layers': 'x'.join(str(h) for h in r['layers']),
                 'learning_rate': r['learning_rate'],
+                'normalization': r.get('normalization', 'hybrid'),
                 'importance_gt': wc['gt'],
                 'importance_fire': wc['fire'],
                 'importance_other': wc['other'],
@@ -705,71 +754,78 @@ def write_results_csv(results: list[dict[str, Any]],
     return csv_path
 
 
+# ── Worker Merge ─────────────────────────────────────────────
+
+
+def merge_worker_results(
+    cfg: dict[str, Any],
+    config_path: str,
+    results_dir: str = 'results',
+    merged_path: str = 'results/grid_search_mlp_results.json',
+) -> list[dict[str, Any]]:
+    """Merge per-worker result files into a single combined JSON.
+
+    Globs results/grid_search_mlp_worker_*.json, deduplicates by combo key,
+    and writes the merged result to merged_path.
+    """
+    import glob as globmod
+    from datetime import datetime
+
+    pattern = os.path.join(results_dir, 'grid_search_mlp_worker_*.json')
+    worker_files = sorted(globmod.glob(pattern))
+    if not worker_files:
+        print(f'  No worker result files found matching {pattern}')
+        return []
+
+    print(f'\n  Merging {len(worker_files)} worker result files...')
+    seen_keys: set[str] = set()
+    merged: list[dict[str, Any]] = []
+    for wf in worker_files:
+        print(f'    {wf}')
+        with open(wf) as f:
+            data = json.load(f)
+        for r in data.get('results', []):
+            key = _combo_key({
+                'loss': r['loss'], 'layers': r['layers'],
+                'learning_rate': r['learning_rate'],
+                'importance_weights': r['importance_weights'],
+                'loss_kwargs': r.get('loss_kwargs', {}),
+                'dropout': r.get('dropout', 0.0),
+                'grad_clip_norm': r.get('grad_clip_norm', 1.0),
+                'normalization': r.get('normalization', 'hybrid'),
+            })
+            if key not in seen_keys:
+                seen_keys.add(key)
+                merged.append(r)
+
+    # Write merged JSON
+    metric = cfg.get('metric', 'error_rate')
+    output = {
+        'config': config_path,
+        'timestamp': datetime.now().isoformat(),
+        'metric': metric,
+        'results': merged,
+    }
+    if merged:
+        best = min(merged, key=lambda r: r.get(metric, float('inf')))
+        output['best_run_id'] = best['run_id']
+        output[f'best_{metric}'] = best[metric]
+    os.makedirs(os.path.dirname(merged_path) or '.', exist_ok=True)
+    with open(merged_path, 'w') as f:
+        json.dump(output, f, indent=2)
+
+    print(f'  Merged {len(merged)} results -> {merged_path}')
+    return merged
+
+
 # ── Main ──────────────────────────────────────────────────────
 
 
-def main() -> None:
-    """Run MLP grid search or single training run."""
-    parser = argparse.ArgumentParser(
-        description='Train MLP fire detector via YAML grid search')
-    parser.add_argument(
-        '--config', type=str, default=None,
-        help='Path to YAML grid search config (default: configs/grid_search_mlp.yaml)')
-    parser.add_argument('--loss', choices=[
-        'bce', 'error-rate', 'tversky', 'focal-error-rate', 'combined',
-    ], default=None)
-    parser.add_argument('--layers', type=int, nargs='+', default=None)
-    parser.add_argument('--lr', type=float, default=None)
-    parser.add_argument('--epochs', type=int, default=100)
-    args = parser.parse_args()
-
-    single_mode = args.loss is not None or args.layers is not None or args.lr is not None
-    if single_mode and args.config:
-        parser.error('Cannot use --config with --loss/--layers/--lr')
-
-    print('=' * 60)
-    print('ML Fire Detection \u2014 MLP Hyperparameter Tuning')
-    print('=' * 60)
-    if single_mode:
-        loss = args.loss or 'bce'
-        layers = args.layers or [64, 32]
-        lr = args.lr or 1e-3
-        cfg = {
-            'epochs': args.epochs,
-            'batch_size': 4096,
-            'metric': 'error_rate',
-            'search_space': {
-                'loss': [loss],
-                'layers': [layers],
-                'learning_rate': [lr],
-                'importance_weights': [{'gt': 10, 'fire': 5, 'other': 1}],
-            },
-        }
-        config_path = 'single-run'
-    else:
-        config_path = args.config or 'configs/grid_search_mlp.yaml'
-        with open(config_path) as f:
-            cfg = yaml.safe_load(f)
-
-    data_dir = cfg.get('data_dir', 'ignite_fire_data')
-    print('\n--- Loading flight data ---')
-    print(f'  Data directory: {data_dir}')
-    flights = group_files_by_flight(data_dir)
-    flight_features = load_all_data(flights)
-
-    combos = build_combos(cfg)
-    metric = cfg.get('metric', 'error_rate')
-    print(f'\nConfig: {config_path}')
-    print(f'Runs: {len(combos)} | Epochs: {cfg.get("epochs", 100)} | Metric: {metric}')
-
-    results_path = 'results/grid_search_mlp_results.json'
-    results = run_grid_search(cfg, flight_features,
-                              config_path=config_path,
-                              results_path=results_path)
-
+def _finalize_results(results: list[dict[str, Any]], metric: str,
+                      results_path: str) -> None:
+    """Select best model, write configs/CSV/plots from completed results."""
     print_results_table(results, metric)
 
-    # CSV summary for easy sorting and comparison
     csv_path = 'results/grid_search_mlp_summary.csv'
     write_results_csv(results, csv_path)
     print(f'\n  CSV summary: {csv_path}')
@@ -805,6 +861,7 @@ def main() -> None:
         print(f'  Loss params:  {lk}')
     print(f'  Architecture: {arch}')
     print(f'  LR:           {best["learning_rate"]}')
+    print(f'  Norm:         {best.get("normalization", "hybrid")}')
     print(f'  Weights:      gt={wc["gt"]}, fire={wc["fire"]}, other={wc["other"]}')
     dp = best.get('dropout', 0.0)
     if dp > 0:
@@ -829,6 +886,110 @@ def main() -> None:
     if best.get('epoch_metrics'):
         plot_best_model_metrics(best, out_path='plots/best_model_metrics_mlp.png')
     print('Done.')
+
+
+def main() -> None:
+    """Run MLP grid search or single training run."""
+    parser = argparse.ArgumentParser(
+        description='Train MLP fire detector via YAML grid search')
+    parser.add_argument(
+        '--config', type=str, default=None,
+        help='Path to YAML grid search config (default: configs/grid_search_mlp.yaml)')
+    parser.add_argument('--loss', choices=[
+        'bce', 'error-rate', 'tversky', 'focal-error-rate', 'combined',
+    ], default=None)
+    parser.add_argument('--layers', type=int, nargs='+', default=None)
+    parser.add_argument('--lr', type=float, default=None)
+    parser.add_argument('--epochs', type=int, default=100)
+    # Parallel worker support
+    parser.add_argument('--worker-id', type=int, default=0,
+                        help='Worker ID for parallel grid search (0-based)')
+    parser.add_argument('--num-workers', type=int, default=1,
+                        help='Total number of parallel workers (default: 1 = sequential)')
+    parser.add_argument('--merge-results', action='store_true',
+                        help='Merge per-worker result files and finalize')
+    args = parser.parse_args()
+
+    single_mode = args.loss is not None or args.layers is not None or args.lr is not None
+    if single_mode and args.config:
+        parser.error('Cannot use --config with --loss/--layers/--lr')
+    if single_mode and (args.num_workers > 1 or args.merge_results):
+        parser.error('Cannot use --num-workers/--merge-results in single-run mode')
+
+    # Load config
+    if single_mode:
+        loss = args.loss or 'bce'
+        layers = args.layers or [64, 32]
+        lr = args.lr or 1e-3
+        cfg = {
+            'epochs': args.epochs,
+            'batch_size': 4096,
+            'metric': 'error_rate',
+            'search_space': {
+                'loss': [loss],
+                'layers': [layers],
+                'learning_rate': [lr],
+                'importance_weights': [{'gt': 10, 'fire': 5, 'other': 1}],
+            },
+        }
+        config_path = 'single-run'
+    else:
+        config_path = args.config or 'configs/grid_search_mlp.yaml'
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f)
+
+    metric = cfg.get('metric', 'error_rate')
+    results_path = 'results/grid_search_mlp_results.json'
+
+    # ── Merge mode: combine worker results and finalize ──
+    if args.merge_results:
+        print('=' * 60)
+        print('ML Fire Detection — Merging Worker Results')
+        print('=' * 60)
+        results = merge_worker_results(cfg, config_path,
+                                       merged_path=results_path)
+        if results:
+            _finalize_results(results, metric, results_path)
+        return
+
+    # ── Training mode (sequential or worker) ──
+    parallel = args.num_workers > 1
+    force_cpu = parallel
+
+    print('=' * 60)
+    print('ML Fire Detection — MLP Hyperparameter Tuning')
+    if parallel:
+        print(f'  Worker {args.worker_id} of {args.num_workers} (CPU only)')
+    print('=' * 60)
+
+    data_dir = cfg.get('data_dir', 'ignite_fire_data')
+    print('\n--- Loading flight data ---')
+    print(f'  Data directory: {data_dir}')
+    flights = group_files_by_flight(data_dir)
+    flight_features = load_all_data(flights)
+
+    combos = build_combos(cfg)
+    print(f'\nConfig: {config_path}')
+    print(f'Total combos: {len(combos)} | Epochs: {cfg.get("epochs", 100)} | Metric: {metric}')
+
+    # Per-worker results path to avoid file conflicts
+    if parallel:
+        results_path = f'results/grid_search_mlp_worker_{args.worker_id}.json'
+
+    results = run_grid_search(cfg, flight_features,
+                              config_path=config_path,
+                              results_path=results_path,
+                              worker_id=args.worker_id,
+                              num_workers=args.num_workers,
+                              force_cpu=force_cpu)
+
+    if not parallel:
+        # Sequential mode: finalize immediately
+        _finalize_results(results, metric, results_path)
+    else:
+        print(f'\n  Worker {args.worker_id} finished. '
+              f'Results: {results_path}')
+        print(f'  Run --merge-results after all workers complete.')
 
 
 if __name__ == '__main__':

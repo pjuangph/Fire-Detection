@@ -4,13 +4,42 @@
 # Stops on first failure.
 set -euo pipefail
 
+# Number of parallel MLP workers (set to 1 for sequential).
+NUM_WORKERS=2
+
 echo "=========================================="
 echo "  Training all fire detection models"
 echo "=========================================="
 
 echo ""
-echo "--- 1/3  MLP ---"
-python train_mlp.py --config configs/grid_search_mlp.yaml
+echo "--- 1/3  MLP (${NUM_WORKERS} parallel workers) ---"
+if [ "$NUM_WORKERS" -gt 1 ]; then
+  mkdir -p results
+  pids=()
+  for i in $(seq 0 $((NUM_WORKERS - 1))); do
+    echo "  Launching worker $i..."
+    python -u train_mlp.py --config configs/grid_search_mlp.yaml \
+      --worker-id "$i" --num-workers "$NUM_WORKERS" \
+      > "results/mlp_worker_${i}.log" 2>&1 &
+    pids+=($!)
+  done
+  echo "  Waiting for ${NUM_WORKERS} workers (PIDs: ${pids[*]})..."
+  fail=0
+  for pid in "${pids[@]}"; do
+    if ! wait "$pid"; then
+      echo "  ERROR: worker PID $pid failed"
+      fail=1
+    fi
+  done
+  if [ "$fail" -ne 0 ]; then
+    echo "  Some workers failed. Check results/mlp_worker_*.log"
+    exit 1
+  fi
+  echo "  All workers finished. Merging results..."
+  python train_mlp.py --config configs/grid_search_mlp.yaml --merge-results
+else
+  python train_mlp.py --config configs/grid_search_mlp.yaml
+fi
 
 echo ""
 echo "--- 2/3  TabPFN Classification ---"

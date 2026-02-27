@@ -8,13 +8,13 @@
 # New losses (tversky, focal-error-rate, combined) use restricted layer/LR
 # grids via loss_overrides to keep total run count manageable.
 #
-# Grid size:
-#   BCE:              4 layers x 3 LR x 3 weights x 2 dropout = 72
-#   Error-rate:       4 layers x 3 LR x 2 dropout             = 24
-#   Tversky:          2 layers x 2 LR x 2 params x 2 dropout  = 16
-#   Focal-error-rate: 2 layers x 2 LR x 2 params x 2 dropout  = 16
-#   Combined:         2 layers x 2 LR x 2 params x 2 dropout  = 16
-#   Total: 144 runs
+# Grid size (x2 normalization = hybrid + standard):
+#   BCE:              4 layers x 3 LR x 3 weights x 2 dropout x 2 norm = 144
+#   Error-rate:       4 layers x 3 LR x 2 dropout x 2 norm             =  48
+#   Tversky:          2 layers x 2 LR x 2 params x 2 dropout x 2 norm  =  32
+#   Focal-error-rate: 2 layers x 2 LR x 2 params x 2 dropout x 2 norm  =  32
+#   Combined:         2 layers x 2 LR x 2 params x 2 dropout x 2 norm  =  32
+#   Total: 288 runs
 
 data_dir: ignite_fire_data
 
@@ -26,8 +26,12 @@ metric: error_rate          # minimize (FN+FP)/P on test set
 search_space:
   loss: [bce, error-rate, tversky, focal-error-rate, combined]
 
+  # Normalization strategy for the 12 input features.
+  #   hybrid:   thermal features / T_ignition (573 K), non-thermal via StandardScaler
+  #   standard: all 12 features via StandardScaler (fit on GT flight)
+  normalization: [hybrid, standard]
+
   layers:
-    - [64, 32]
     - [64, 64, 64, 32]
     - [128, 64, 32]
     - [128, 128, 128, 64]
@@ -62,11 +66,11 @@ search_space:
   # Restrict new losses to top architectures/LRs to keep run count sane.
   loss_overrides:
     tversky:
-      layers: [[64, 32], [64, 64, 64, 32]]
+      layers: [[128, 64, 32], [128, 128, 128, 32]]
       learning_rate: [0.01, 0.001]
     focal-error-rate:
-      layers: [[64, 32], [64, 64, 64, 32]]
+      layers: [[128, 64, 32], [128, 128, 128, 32]]
       learning_rate: [0.01, 0.001]
     combined:
-      layers: [[64, 32], [64, 64, 64, 32]]
+      layers: [[128, 64, 32], [128, 128, 128, 32]]
       learning_rate: [0.01, 0.001]
