@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import csv
 import itertools
-import json
 import os
 import shutil
 from typing import Any
@@ -72,7 +71,6 @@ def train_model(
     save_every: int = 25,
     X_test: NDArrayFloat | None = None,
     y_test: NDArrayFloat | None = None,
-    force_cpu: bool = False,
 ) -> TrainResult:
     """Train FireMLP with the selected loss function.
 
@@ -87,13 +85,12 @@ def train_model(
         save_every: Save checkpoint every N epochs (default 25).
         X_test: Optional normalized test features for per-epoch evaluation.
         y_test: Optional test labels for per-epoch evaluation.
-        force_cpu: If True, train on CPU only (useful for parallel workers).
 
     Returns:
         Dict with keys: model, loss_history, epochs_completed,
         optimizer_state, scheduler_state.
     """
-    device = get_device(force_cpu=force_cpu)
+    device = get_device()
     if not quiet:
         print(f'  Device: {device}')
 
@@ -339,29 +336,14 @@ def _combo_key(combo: dict[str, Any]) -> str:
 def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
                     config_path: str = '',
                     results_path: str = 'results/grid_search_mlp_results.json',
-                    worker_id: int = 0,
-                    num_workers: int = 1,
-                    force_cpu: bool = False,
                     ) -> list[dict[str, Any]]:
     """Run all grid search combinations and return results.
 
     Supports restart: loads existing results from results_path, skips
     fully-trained combos, and resumes under-trained ones.
-
-    Args:
-        worker_id: This worker's ID (0-based). Default 0.
-        num_workers: Total parallel workers. Default 1 (sequential).
-        force_cpu: If True, train on CPU only.
     """
     all_combos = build_combos(cfg)
-    # Tag each combo with its original run_id (1-based) so checkpoint
-    # filenames stay stable across workers.
     indexed_combos = [(i + 1, c) for i, c in enumerate(all_combos)]
-    if num_workers > 1:
-        indexed_combos = [(rid, c) for rid, c in indexed_combos
-                          if (rid - 1) % num_workers == worker_id]
-        print(f'\n  Worker {worker_id}/{num_workers}: handling '
-              f'{len(indexed_combos)}/{len(all_combos)} combos')
     n_combos_total = len(all_combos)
     epochs = cfg.get('epochs', 100)
     batch_size = cfg.get('batch_size', 4096)
@@ -519,8 +501,7 @@ def run_grid_search(cfg: dict[str, Any], flight_features: FlightFeatures,
             grad_clip_norm=gc, dropout=dp,
             quiet=False, resume_from=resume_ckpt,
             save_path=ckpt_path, save_every=save_every,
-            X_test=X_test_norm, y_test=y_test,
-            force_cpu=force_cpu)
+            X_test=X_test_norm, y_test=y_test)
 
         model = train_result['model']
         loss_history = train_result['loss_history']
@@ -754,70 +735,6 @@ def write_results_csv(results: list[dict[str, Any]],
     return csv_path
 
 
-# ── Worker Merge ─────────────────────────────────────────────
-
-
-def merge_worker_results(
-    cfg: dict[str, Any],
-    config_path: str,
-    results_dir: str = 'results',
-    merged_path: str = 'results/grid_search_mlp_results.json',
-) -> list[dict[str, Any]]:
-    """Merge per-worker result files into a single combined JSON.
-
-    Globs results/grid_search_mlp_worker_*.json, deduplicates by combo key,
-    and writes the merged result to merged_path.
-    """
-    import glob as globmod
-    from datetime import datetime
-
-    pattern = os.path.join(results_dir, 'grid_search_mlp_worker_*.json')
-    worker_files = sorted(globmod.glob(pattern))
-    if not worker_files:
-        print(f'  No worker result files found matching {pattern}')
-        return []
-
-    print(f'\n  Merging {len(worker_files)} worker result files...')
-    seen_keys: set[str] = set()
-    merged: list[dict[str, Any]] = []
-    for wf in worker_files:
-        print(f'    {wf}')
-        with open(wf) as f:
-            data = json.load(f)
-        for r in data.get('results', []):
-            key = _combo_key({
-                'loss': r['loss'], 'layers': r['layers'],
-                'learning_rate': r['learning_rate'],
-                'importance_weights': r['importance_weights'],
-                'loss_kwargs': r.get('loss_kwargs', {}),
-                'dropout': r.get('dropout', 0.0),
-                'grad_clip_norm': r.get('grad_clip_norm', 1.0),
-                'normalization': r.get('normalization', 'hybrid'),
-            })
-            if key not in seen_keys:
-                seen_keys.add(key)
-                merged.append(r)
-
-    # Write merged JSON
-    metric = cfg.get('metric', 'error_rate')
-    output = {
-        'config': config_path,
-        'timestamp': datetime.now().isoformat(),
-        'metric': metric,
-        'results': merged,
-    }
-    if merged:
-        best = min(merged, key=lambda r: r.get(metric, float('inf')))
-        output['best_run_id'] = best['run_id']
-        output[f'best_{metric}'] = best[metric]
-    os.makedirs(os.path.dirname(merged_path) or '.', exist_ok=True)
-    with open(merged_path, 'w') as f:
-        json.dump(output, f, indent=2)
-
-    print(f'  Merged {len(merged)} results -> {merged_path}')
-    return merged
-
-
 # ── Main ──────────────────────────────────────────────────────
 
 
@@ -901,20 +818,11 @@ def main() -> None:
     parser.add_argument('--layers', type=int, nargs='+', default=None)
     parser.add_argument('--lr', type=float, default=None)
     parser.add_argument('--epochs', type=int, default=100)
-    # Parallel worker support
-    parser.add_argument('--worker-id', type=int, default=0,
-                        help='Worker ID for parallel grid search (0-based)')
-    parser.add_argument('--num-workers', type=int, default=1,
-                        help='Total number of parallel workers (default: 1 = sequential)')
-    parser.add_argument('--merge-results', action='store_true',
-                        help='Merge per-worker result files and finalize')
     args = parser.parse_args()
 
     single_mode = args.loss is not None or args.layers is not None or args.lr is not None
     if single_mode and args.config:
         parser.error('Cannot use --config with --loss/--layers/--lr')
-    if single_mode and (args.num_workers > 1 or args.merge_results):
-        parser.error('Cannot use --num-workers/--merge-results in single-run mode')
 
     # Load config
     if single_mode:
@@ -941,25 +849,8 @@ def main() -> None:
     metric = cfg.get('metric', 'error_rate')
     results_path = 'results/grid_search_mlp_results.json'
 
-    # ── Merge mode: combine worker results and finalize ──
-    if args.merge_results:
-        print('=' * 60)
-        print('ML Fire Detection — Merging Worker Results')
-        print('=' * 60)
-        results = merge_worker_results(cfg, config_path,
-                                       merged_path=results_path)
-        if results:
-            _finalize_results(results, metric, results_path)
-        return
-
-    # ── Training mode (sequential or worker) ──
-    parallel = args.num_workers > 1
-    force_cpu = parallel
-
     print('=' * 60)
     print('ML Fire Detection — MLP Hyperparameter Tuning')
-    if parallel:
-        print(f'  Worker {args.worker_id} of {args.num_workers} (CPU only)')
     print('=' * 60)
 
     data_dir = cfg.get('data_dir', 'ignite_fire_data')
@@ -972,24 +863,11 @@ def main() -> None:
     print(f'\nConfig: {config_path}')
     print(f'Total combos: {len(combos)} | Epochs: {cfg.get("epochs", 100)} | Metric: {metric}')
 
-    # Per-worker results path to avoid file conflicts
-    if parallel:
-        results_path = f'results/grid_search_mlp_worker_{args.worker_id}.json'
-
     results = run_grid_search(cfg, flight_features,
                               config_path=config_path,
-                              results_path=results_path,
-                              worker_id=args.worker_id,
-                              num_workers=args.num_workers,
-                              force_cpu=force_cpu)
+                              results_path=results_path)
 
-    if not parallel:
-        # Sequential mode: finalize immediately
-        _finalize_results(results, metric, results_path)
-    else:
-        print(f'\n  Worker {args.worker_id} finished. '
-              f'Results: {results_path}')
-        print(f'  Run --merge-results after all workers complete.')
+    _finalize_results(results, metric, results_path)
 
 
 if __name__ == '__main__':

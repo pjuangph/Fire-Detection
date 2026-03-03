@@ -13,14 +13,8 @@ NDArrayFloat = npt.NDArray[np.floating[Any]]
 Metrics = dict[str, int | float]
 
 
-def get_device(force_cpu: bool = False) -> torch.device:
-    """Return the best available device: CUDA > MPS (Mac) > CPU.
-
-    Args:
-        force_cpu: If True, always return CPU (useful for parallel workers).
-    """
-    if force_cpu:
-        return torch.device('cpu')
+def get_device() -> torch.device:
+    """Return the best available device: CUDA > MPS (Mac) > CPU."""
     if torch.cuda.is_available():
         return torch.device('cuda')
     if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
