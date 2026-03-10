@@ -222,9 +222,12 @@ def create_presentation():
                  font_size=24, color=ACCENT_ORANGE, bold=False,
                  alignment=PP_ALIGN.CENTER)
     _add_textbox(slide, Inches(1), Inches(4.2), Inches(11), Inches(0.6),
-                 'Multi-Layer Perceptron & Tabular Prior-Fitted Networks (TabPFN)',
+                 'Multi-Layer Perceptron (MLP)',
                  font_size=20, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
-    _add_textbox(slide, Inches(1), Inches(5.8), Inches(11), Inches(0.5),
+    _add_textbox(slide, Inches(1), Inches(5.2), Inches(11), Inches(0.5),
+                 'Team Flaming Kitty: Paht Juangphanich, Codi Lee, Adam Yingling, Candice McDonald',
+                 font_size=18, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
+    _add_textbox(slide, Inches(1), Inches(6.0), Inches(11), Inches(0.5),
                  'Kaibab Plateau, Arizona  |  October 18\u201320, 2023',
                  font_size=16, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
 
@@ -376,12 +379,12 @@ def create_presentation():
                     Inches(6.5), Inches(1.8), width=Inches(6.5))
 
     # ══════════════════════════════════════════════════════════════════
-    # 7 — ML Approach: MLP & TabPFN Overview
+    # 7 — ML Approach: MLP Overview
     # ══════════════════════════════════════════════════════════════════
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_slide_bg(slide, WHITE)
     _add_title_bar(slide, 'Machine Learning Approach')
-    _add_subtitle(slide, 'Two model families, same 12 input features, same output: P(fire) per grid cell')
+    _add_subtitle(slide, 'FireMLP: 12 input features \u2192 P(fire) per grid cell')
 
     _add_bullet_frame(slide, Inches(0.5), Inches(2.0), Inches(5.8), Inches(5), [
         'Why ML?  Threshold rules miss smoldering edges, '
@@ -389,12 +392,13 @@ def create_presentation():
         '',
         'FireMLP (Multi-Layer Perceptron):',
         '  Trained from scratch on our data',
-        '  12 \u2192 64 \u2192 32 \u2192 1  |  2,945 params  |  ~12 KB',
+        '  Variable architecture (grid-searched)',
+        '  Compact: ~11K params  |  ~10 KB',
+        '  5 loss functions tested across 240 configs',
         '',
-        'TabPFN (Tabular Prior-Fitted Network):',
-        '  Pre-trained transformer for tabular data',
-        '  Fine-tuned on our fire features (20 epochs)',
-        '  7.2M params  |  ~83 MB  |  Built-in ensemble',
+        'Two selected models:',
+        '  Conservative: minimal false positives on clear days',
+        '  Best Overall: lowest total error rate',
     ], font_size=16, color=DARK_TEXT, spacing=Pt(6))
 
     _safe_add_image(slide, 'plots/diagram_model_comparison.png',
@@ -413,56 +417,47 @@ def create_presentation():
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_slide_bg(slide, WHITE)
     _add_title_bar(slide, 'Loss Functions & Hyperparameter Tuning')
-    _add_subtitle(slide, '97 total configurations: 49 MLP + 16 TabPFN-Cls + 32 TabPFN-Reg')
+    _add_subtitle(slide, '240 MLP configurations tested across 5 loss functions')
 
-    # MLP losses
-    _add_textbox(slide, Inches(0.3), Inches(2.0), Inches(4.2), Inches(0.5),
-                 'MLP (49 runs)', font_size=20, color=ACCENT_BLUE, bold=True)
-    _add_bullet_frame(slide, Inches(0.3), Inches(2.6), Inches(4.2), Inches(2.2), [
-        'Weighted BCE: importance \u00d7 inv-frequency',
-        'SoftErrorRateLoss: (soft_FN + soft_FP) / P',
-        '4 architectures \u00d7 3 LRs \u00d7 weight configs',
-    ], font_size=14, color=DARK_TEXT, spacing=Pt(6))
+    # MLP losses table
+    _add_textbox(slide, Inches(0.3), Inches(2.0), Inches(6.0), Inches(0.5),
+                 'MLP Grid Search (240 runs)', font_size=20, color=ACCENT_BLUE, bold=True)
 
-    # TabPFN-Cls losses
-    _add_textbox(slide, Inches(4.7), Inches(2.0), Inches(4.2), Inches(0.5),
-                 'TabPFN Classification (16 runs)', font_size=20,
+    loss_rows = [
+        ('Loss Function', 'Runs', 'Best Error Rate'),
+        ('Weighted BCE', '108', '0.0511'),
+        ('Tversky', '32', '0.0507'),
+        ('Error-Rate', '36', '0.0623'),
+        ('Focal-Error-Rate', '32', '0.0988'),
+        ('Combined', '32', '0.0567'),
+    ]
+    _make_table(slide, loss_rows, Inches(0.3), Inches(2.6),
+                Inches(6.0), Inches(3.0), col_widths=[2.5, 1.0, 2.5])
+
+    # Tuned hyperparameters
+    _add_textbox(slide, Inches(6.8), Inches(2.0), Inches(6.0), Inches(0.5),
+                 'Hyperparameter Space', font_size=20,
                  color=RGBColor(0x7C, 0x3A, 0xED), bold=True)
-    _add_bullet_frame(slide, Inches(4.7), Inches(2.6), Inches(4.2), Inches(2.2), [
-        'Cross-Entropy Loss (binary)',
-        '2 LRs \u00d7 2 n_estimators \u00d7 2 WD \u00d7 2 GC',
+    _add_bullet_frame(slide, Inches(6.8), Inches(2.6), Inches(6.0), Inches(3.0), [
+        'Architectures: 64\u00d764\u00d764\u00d732, 128\u00d764\u00d732, 128\u00d7128\u00d7128\u00d732/64',
+        'Learning rates: 0.01, 0.001, 0.0001',
+        'Normalization: standard vs hybrid',
+        'Dropout: 0.0 vs 0.1',
+        'Importance weights: gt \u2208 {5,10,15}, fire \u2208 {3,5,10}',
+        '',
+        'Key findings:',
+        '  Standard normalization >> hybrid',
+        '  No dropout >> dropout 0.1',
+        '  Smaller architectures perform better',
     ], font_size=14, color=DARK_TEXT, spacing=Pt(6))
 
-    # TabPFN-Reg losses
-    _add_textbox(slide, Inches(9.2), Inches(2.0), Inches(4), Inches(0.5),
-                 'TabPFN Regression (32 runs)', font_size=20,
-                 color=RGBColor(0x7C, 0x3A, 0xED), bold=True)
-    _add_bullet_frame(slide, Inches(9.2), Inches(2.6), Inches(4), Inches(2.2), [
-        'CRPS + optional MSE Loss',
-        'Same as Cls \u00d7 2 MSE weight options',
-    ], font_size=14, color=DARK_TEXT, spacing=Pt(6))
-
-    # Oversampling — shared strategy
-    _add_textbox(slide, Inches(0.3), Inches(4.9), Inches(12.5), Inches(0.4),
+    # Oversampling
+    _add_textbox(slide, Inches(0.3), Inches(5.8), Inches(12.5), Inches(0.4),
                  'Handling Class Imbalance', font_size=18, color=ACCENT_RED, bold=True)
-    _add_bullet_frame(slide, Inches(0.3), Inches(5.4), Inches(12.5), Inches(1.0), [
-        'Only ~1.7% of grid cells contain fire \u2014 without correction, models learn to always predict "no fire"',
-        'Minority oversampling: fire locations are resampled to match no-fire count, balancing the training set',
-        'Pixel-wise weights (MLP): ground-truth flight \u00d710, fire pixels \u00d75, others \u00d71 \u2014 further emphasizes rare events',
+    _add_bullet_frame(slide, Inches(0.3), Inches(6.2), Inches(12.5), Inches(1.0), [
+        'Only ~1.7% of grid cells contain fire \u2014 minority oversampling balances the training set',
+        'Pixel-wise weights: ground-truth flight \u00d710, fire pixels \u00d75, others \u00d71',
     ], font_size=14, color=DARK_TEXT, spacing=Pt(4))
-
-    # Bottom callout
-    shape = slide.shapes.add_shape(
-        MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.5), Inches(6.5),
-        Inches(12.3), Inches(0.8))
-    shape.fill.solid()
-    shape.fill.fore_color.rgb = DARK_BG
-    shape.line.fill.background()
-    _add_textbox(slide, Inches(0.8), Inches(6.55), Inches(11.8), Inches(0.7),
-                 'Evaluation metric:  error_rate = (FN + FP) / P  where P = actual fire pixels  |  '
-                 'All three models receive the SAME 12 aggregate features',
-                 font_size=14, color=WHITE, bold=False,
-                 alignment=PP_ALIGN.CENTER)
 
     # ══════════════════════════════════════════════════════════════════
     # 10 — Reading the Real-Time Plots (legend)
@@ -472,133 +467,107 @@ def create_presentation():
     _center_image(slide, 'plots/diagram_realtime_legend.png')
 
     # ══════════════════════════════════════════════════════════════════
-    # 11 — MLP Results — Best Model
-    # ══════════════════════════════════════════════════════════════════
-    _metrics_slide(prs,
-                   'MLP Results \u2014 Best Model',
-                   'SoftErrorRateLoss  |  [64, 32]  |  lr=0.01  |  2,945 params',
-                   'configs/best_model_mlp.yaml',
-                   'plots/convergence_mlp.png',
-                   'MLP')
-
-    # ══════════════════════════════════════════════════════════════════
-    # 12 — MLP vs Baseline: Pre-Burn (FP analysis)
+    # 11 — Two Selected Models: Conservative vs Best Overall
     # ══════════════════════════════════════════════════════════════════
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_slide_bg(slide, WHITE)
-    _add_title_bar(slide, 'MLP vs Baseline \u2014 Pre-Burn (Flight 03)')
-    _add_subtitle(slide, 'Hybrid MLP: SoftErrorRateLoss | [64, 32] | lr=0.01 | threshold \u2229 MLP')
-    _add_textbox(slide, Inches(0.6), Inches(1.85), Inches(12), Inches(0.4),
-                 'No real fire present \u2014 all detections are false positives.  '
-                 'Hybrid MLP: 0 \u2192 15 \u2192 49 FP across 9 sweeps  |  '
-                 'Threshold: 0 \u2192 70 FP  (30% reduction)',
-                 font_size=16, color=ACCENT_RED, bold=False)
-    _gif_path = 'plots/gifs/compare_ml_vs_simple_2480103_pre-burn.gif'
-    added = _safe_add_image(slide, _gif_path,
-                            Inches(0.5), Inches(2.35), width=Inches(12.3))
-    if not added:
-        _add_textbox(slide, Inches(1), Inches(3.5), Inches(11), Inches(1),
-                     f'[Animation not found: {_gif_path}]',
-                     font_size=18, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
+    _add_title_bar(slide, 'Two Selected Models from 240-Run Grid Search')
+    _add_subtitle(slide, 'Conservative (lowest daytime FP) vs Best Overall (lowest error rate)')
+
+    model_rows = [
+        ('', 'Conservative (Run #17)', 'Best Overall (Run #156)'),
+        ('Loss', 'Weighted BCE', 'Tversky (\u03b1=0.5, \u03b2=0.5)'),
+        ('Architecture', '64\u00d764\u00d764\u00d732', '128\u00d764\u00d732'),
+        ('Learning Rate', '0.001', '0.001'),
+        ('Flight 03 FP', '27', '117'),
+        ('Test TP', '8,254', '8,899'),
+        ('Test FP', '63', '291'),
+        ('Test FN', '814', '169'),
+        ('Precision', '99.2%', '96.8%'),
+        ('Recall', '91.0%', '98.1%'),
+        ('Error Rate', '0.097', '0.051'),
+    ]
+    _make_table(slide, model_rows, Inches(0.5), Inches(2.0),
+                Inches(8.0), Inches(5.0), col_widths=[2.5, 2.75, 2.75])
+
+    _add_bullet_frame(slide, Inches(9.0), Inches(2.5), Inches(4), Inches(4.5), [
+        'Conservative: prioritizes zero false alarms on clear-sky daytime imagery',
+        '',
+        'Best Overall: catches 98% of all fires with lowest total error rate',
+        '',
+        'Both use standard normalization, no dropout, LR=0.001',
+        '',
+        'Tradeoff: 27 vs 117 FP on clear day; 91% vs 98% fire recall',
+    ], font_size=15, color=DARK_TEXT, spacing=Pt(6))
 
     # ══════════════════════════════════════════════════════════════════
-    # 13 — MLP vs Baseline: Daytime Smoldering
+    # 12-15 — Per-Flight Model Comparison (spatial overlay plots)
     # ══════════════════════════════════════════════════════════════════
-    _gif_slide(prs,
-               'MLP vs Baseline \u2014 Daytime Smoldering (Flight 06)',
-               'plots/gifs/compare_ml_vs_simple_2480106_smoldering.gif',
-               'Hardest detection scenario: low-intensity fire with veg-loss confirmation')
+    _flight_compare_info = [
+        ('2480103', 'Pre-Burn (Flight 03) \u2014 Daytime, No Fire',
+         'All detections are false positives  |  Red = Conservative, Purple = Best Overall, Blue = Both'),
+        ('2480104', 'Active Fire (Flight 04) \u2014 Night',
+         'First fire flight  |  Red = Conservative only, Purple = Best Overall only, Blue = Both'),
+        ('2480105', 'Overnight (Flight 05) \u2014 Night',
+         'Second night flight  |  Red = Conservative only, Purple = Best Overall only, Blue = Both'),
+        ('2480106', 'Daytime Smoldering (Flight 06)',
+         'Hardest detection scenario  |  Red = Conservative only, Purple = Best Overall only, Blue = Both'),
+    ]
+    for fnum_clean, title, subtitle_text in _flight_compare_info:
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        _set_slide_bg(slide, WHITE)
+        _add_title_bar(slide, f'Model Comparison \u2014 {title}')
+        _add_subtitle(slide, subtitle_text)
+        # Fit image within remaining space (below subtitle, above bottom)
+        img_path = f'plots/model_compare_{fnum_clean}.png'
+        if os.path.isfile(img_path):
+            with Image.open(img_path) as img:
+                img_w, img_h = img.size
+            aspect = img_w / img_h
+            avail_h = Inches(5.5)   # 7.5 - 1.8 top - 0.2 bottom
+            avail_w = Inches(12.3)  # 13.333 - margins
+            fit_h = avail_h
+            fit_w = int(fit_h * aspect)
+            if fit_w > avail_w:
+                fit_w = avail_w
+                fit_h = int(fit_w / aspect)
+            left = (Inches(13.333) - fit_w) // 2
+            slide.shapes.add_picture(img_path, left, Inches(1.8), fit_w, fit_h)
 
     # ══════════════════════════════════════════════════════════════════
-    # 14 — TabPFN Classification Results
-    # ══════════════════════════════════════════════════════════════════
-    _metrics_slide(prs,
-                   'TabPFN Classification \u2014 Results',
-                   'Cross-Entropy Loss  |  Fine-tuned 20 epochs',
-                   'configs/best_model_tabpfn_classification.yaml',
-                   'plots/convergence_tabpfn_classification.png',
-                   'TabPFN Classification')
-
-    # ══════════════════════════════════════════════════════════════════
-    # 15 — TabPFN Cls vs Baseline: Pre-Burn
-    # ══════════════════════════════════════════════════════════════════
-    _gif_slide(prs,
-               'TabPFN Classification vs Baseline \u2014 Pre-Burn (Flight 03)',
-               'plots/gifs/compare_simple_vs_tabpfn_classification_2480103_pre-burn.gif',
-               'False positive comparison \u2014 no real fire present')
-
-    # ══════════════════════════════════════════════════════════════════
-    # 16 — TabPFN Cls vs Baseline: Smoldering
-    # ══════════════════════════════════════════════════════════════════
-    _gif_slide(prs,
-               'TabPFN Classification vs Baseline \u2014 Smoldering (Flight 06)',
-               'plots/gifs/compare_simple_vs_tabpfn_classification_2480106_smoldering.gif',
-               'Daytime smoldering with vegetation-loss confirmation')
-
-    # ══════════════════════════════════════════════════════════════════
-    # 17 — TabPFN Regression Results
-    # ══════════════════════════════════════════════════════════════════
-    _metrics_slide(prs,
-                   'TabPFN Regression \u2014 Results',
-                   'CRPS + MSE Loss  |  Fine-tuned 20 epochs',
-                   'configs/best_model_tabpfn_regression.yaml',
-                   'plots/convergence_tabpfn_regression.png',
-                   'TabPFN Regression')
-
-    # ══════════════════════════════════════════════════════════════════
-    # 18 — TabPFN Reg vs Baseline: Smoldering
-    # ══════════════════════════════════════════════════════════════════
-    _gif_slide(prs,
-               'TabPFN Regression vs Baseline \u2014 Smoldering (Flight 06)',
-               'plots/gifs/compare_simple_vs_tabpfn_regression_2480106_smoldering.gif',
-               'Continuous probability output thresholded at optimal cutoff')
-
-    # ══════════════════════════════════════════════════════════════════
-    # 19 — Model Comparison Summary
+    # 16 — Model Comparison Summary
     # ══════════════════════════════════════════════════════════════════
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_slide_bg(slide, WHITE)
     _add_title_bar(slide, 'Model Comparison Summary')
-    _add_subtitle(slide, 'All models evaluated on same test set (4 flights)')
+    _add_subtitle(slide, 'Two selected MLP models from 240-run grid search  |  Evaluated on same test set (4 flights)')
 
-    header = ['Model', 'Error Rate', 'TP', 'FP', 'FN', 'Precision', 'Recall']
-    model_rows = [header]
+    summary_header = ['', 'Conservative (Run #17)', 'Best Overall (Run #156)']
+    summary_rows = [
+        summary_header,
+        ['Loss Function', 'Weighted BCE', 'Tversky'],
+        ['Architecture', '64\u00d764\u00d764\u00d732', '128\u00d764\u00d732'],
+        ['Flight 03 FP (daytime)', '27', '117'],
+        ['Error Rate', '0.097', '0.051'],
+        ['TP', '8,254', '8,899'],
+        ['FP', '63', '291'],
+        ['FN', '814', '169'],
+        ['Precision', '99.2%', '96.8%'],
+        ['Recall', '91.0%', '98.1%'],
+    ]
+    _make_table(slide, summary_rows,
+                Inches(0.5), Inches(2.0), Inches(8.5), Inches(4.5),
+                col_widths=[3.0, 2.75, 2.75])
 
-    mlp_m = _load_yaml_metrics('configs/best_model_mlp.yaml')
-    if mlp_m:
-        model_rows.append([
-            'MLP', f'{mlp_m["error_rate"]:.4f}',
-            f'{mlp_m["TP"]:,}', f'{mlp_m["FP"]:,}', f'{mlp_m["FN"]:,}',
-            f'{mlp_m["precision"]:.4f}', f'{mlp_m["recall"]:.4f}'])
-
-    cls_m = _load_yaml_metrics('configs/best_model_tabpfn_classification.yaml')
-    if cls_m:
-        model_rows.append([
-            'TabPFN-Cls', f'{cls_m["error_rate"]:.4f}',
-            f'{cls_m["TP"]:,}', f'{cls_m["FP"]:,}', f'{cls_m["FN"]:,}',
-            f'{cls_m["precision"]:.4f}', f'{cls_m["recall"]:.4f}'])
-
-    reg_m = _load_yaml_metrics('configs/best_model_tabpfn_regression.yaml')
-    if reg_m:
-        model_rows.append([
-            'TabPFN-Reg', f'{reg_m["error_rate"]:.4f}',
-            f'{reg_m["TP"]:,}', f'{reg_m["FP"]:,}', f'{reg_m["FN"]:,}',
-            f'{reg_m["precision"]:.4f}', f'{reg_m["recall"]:.4f}'])
-
-    if len(model_rows) > 1:
-        _make_table(slide, model_rows,
-                    Inches(0.5), Inches(2.2), Inches(12.3), Inches(2.5),
-                    col_widths=[2.0, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5])
-    else:
-        _add_textbox(slide, Inches(1), Inches(3), Inches(11), Inches(1),
-                     'No model results available yet.  Run train-all-models.sh.',
-                     font_size=18, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
-
-    _add_bullet_frame(slide, Inches(0.8), Inches(5.2), Inches(11), Inches(2), [
-        'Error Rate = (FP + FN) / P  where P = actual fire pixels  |  Lower is better',
-        'All models use the same 12 aggregate features from multi-pass gridding',
-        '97 hyperparameter configurations tested across all three model families',
-    ], font_size=16, color=DARK_TEXT, spacing=Pt(8))
+    _add_bullet_frame(slide, Inches(9.5), Inches(2.5), Inches(3.5), Inches(4.5), [
+        'Conservative: deploy when false alarms are costly (e.g. automated alerts)',
+        '',
+        'Best Overall: deploy when missing fires is costly (e.g. operational monitoring)',
+        '',
+        '240 configs tested across 5 loss functions',
+        '',
+        'Error Rate = (FP + FN) / P',
+    ], font_size=14, color=DARK_TEXT, spacing=Pt(6))
 
     # ══════════════════════════════════════════════════════════════════
     # 20 — Conclusion + Future Work
@@ -607,31 +576,33 @@ def create_presentation():
     _set_slide_bg(slide, WHITE)
     _add_title_bar(slide, 'Conclusion & Future Work')
 
-    # Best model callout
+    # Best models callout
     shape = slide.shapes.add_shape(
         MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.5), Inches(2.0),
-        Inches(6), Inches(3.0))
+        Inches(6), Inches(3.5))
     shape.fill.solid()
     shape.fill.fore_color.rgb = GREEN_BG
     shape.line.color.rgb = GREEN
     shape.line.width = Pt(2)
 
-    if mlp_m:
-        _add_textbox(slide, Inches(0.8), Inches(2.1), Inches(5.4), Inches(0.5),
-                     '\u2b50 Best Model: MLP (SoftErrorRateLoss)',
-                     font_size=20, color=GREEN, bold=True)
-        _add_bullet_frame(slide, Inches(0.8), Inches(2.7), Inches(5.4), Inches(2), [
-            f'Error Rate: {mlp_m["error_rate"]:.4f}  |  '
-            f'Recall: {mlp_m["recall"]:.4f}',
-            f'TP: {mlp_m["TP"]:,}  |  FP: {mlp_m["FP"]:,}  |  FN: {mlp_m["FN"]:,}',
-            'Compact 2-layer network (12 KB) trains in seconds',
-        ], font_size=14, color=DARK_TEXT, spacing=Pt(6))
+    _add_textbox(slide, Inches(0.8), Inches(2.1), Inches(5.4), Inches(0.5),
+                 '\u2b50 Two Production Models from 240-Run Search',
+                 font_size=20, color=GREEN, bold=True)
+    _add_bullet_frame(slide, Inches(0.8), Inches(2.7), Inches(5.4), Inches(2.5), [
+        'Conservative (Run #17, BCE):',
+        '  27 FP on clear day  |  Precision 99.2%  |  Recall 91.0%',
+        '',
+        'Best Overall (Run #156, Tversky):',
+        '  Error rate 0.051  |  Precision 96.8%  |  Recall 98.1%',
+        '',
+        'Compact networks (<10 KB) train in seconds',
+    ], font_size=14, color=DARK_TEXT, spacing=Pt(4))
 
     # Future work
     _add_textbox(slide, Inches(7.0), Inches(2.0), Inches(5.5), Inches(0.5),
                  'Next Steps', font_size=22, color=ACCENT_BLUE, bold=True)
     _add_bullet_frame(slide, Inches(7.0), Inches(2.7), Inches(5.5), Inches(4.5), [
-        'Ensemble: combine MLP + TabPFN predictions',
+        'Ensemble: combine conservative + best overall predictions',
         'Transfer learning to new fire campaigns',
         'Spatial context features (neighbor stats)',
         'Temporal features from sequential passes',
@@ -650,9 +621,9 @@ def create_presentation():
     _add_bullet_frame(slide, Inches(2), Inches(3.0), Inches(9), Inches(3.5), [
         'Physics-based fire detection from 50-channel MASTER hyperspectral data',
         'Multi-pass consistency + vegetation-loss confirmation reduce false positives',
-        'FireMLP achieves 0.031 error rate with 99.4% recall on test set',
-        'TabPFN offers meta-learned alternative with minimal hyperparameter tuning',
-        '97 configurations tested across MLP, TabPFN-Cls, and TabPFN-Reg',
+        '240 MLP configurations tested across 5 loss functions',
+        'Conservative model: 27 FP on clear day (99.2% precision)',
+        'Best Overall model: 0.051 error rate with 98.1% recall',
     ], font_size=20, color=DARK_TEXT, spacing=Pt(14))
     _add_textbox(slide, Inches(1), Inches(6.5), Inches(11), Inches(0.5),
                  'github.com  |  FireSense 2023  |  MASTER L1B',
@@ -679,15 +650,7 @@ def create_presentation():
                'Backup: MLP vs Baseline \u2014 Overnight (Flight 05)',
                'plots/gifs/compare_ml_vs_simple_2480105_overnight.gif')
 
-    # B3 — TabPFN Cls vs Baseline: Active Fire
-    _gif_slide(prs,
-               'Backup: TabPFN Cls vs Baseline \u2014 Active Fire (Flight 04)',
-               'plots/gifs/compare_simple_vs_tabpfn_classification_2480104_active.gif')
-
-    # B4 — TabPFN Reg vs Baseline: Active Fire
-    _gif_slide(prs,
-               'Backup: TabPFN Reg vs Baseline \u2014 Active Fire (Flight 04)',
-               'plots/gifs/compare_simple_vs_tabpfn_regression_2480104_active.gif')
+    # (TabPFN backup slides removed)
 
     # B5 — MLP Prediction Maps
     slide = prs.slides.add_slide(prs.slide_layouts[6])
@@ -726,7 +689,7 @@ def create_presentation():
     # ── Save ──
     out_path = 'Fire_Detection_Presentation.pptx'
     prs.save(out_path)
-    n_main = 21
+    n_main = 18
     n_total = len(prs.slides)
     print(f'Saved presentation to {out_path}')
     print(f'  {n_main} main slides + {n_total - n_main} backup = {n_total} total')
