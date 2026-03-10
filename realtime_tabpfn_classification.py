@@ -48,7 +48,7 @@ def main() -> None:
     print()
     for fnum, info in sorted(flights.items()):
         simulate_flight(fnum, info['files'], info['comment'], gs,
-                        ml_model=ml_model, detector_name='ml')
+                        ml_model=ml_model, detector_name='tabpfn_classification')
 
     print('All simulations complete.')
 

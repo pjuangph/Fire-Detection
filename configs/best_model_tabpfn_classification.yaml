@@ -1,0 +1,17 @@
+detector: tabpfn_classification
+model_type: tabpfn
+checkpoint: checkpoint/fire_detector_tabpfn_best.pt
+threshold: 0.5
+T_ignition: 300    # [°C]
+training:
+  batch_size: 1024
+  n_estimators: 2
+  epochs: 20
+metrics:
+  error_rate: 5.661016949152542
+  precision: 0.09464146362611636
+  recall: 0.5441176470588235
+  TP: 2183
+  FP: 20883
+  FN: 1829
+  TN: 277434

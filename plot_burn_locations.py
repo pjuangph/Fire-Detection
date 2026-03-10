@@ -65,10 +65,10 @@ def plot_single_flight(grid_T4, grid_T11, grid_SWIR, grid_fire, lat_axis, lon_ax
     detection_label = 'False Positives' if is_preburn else 'Fire'
     detection_color = 'orange' if is_preburn else 'red'
 
-    fig, axes = plt.subplots(2, 2, figsize=(18, 14))
+    fig, axes = plt.subplots(2, 2, figsize=(20, 14))
     fig.suptitle(f'Flight {flight_num} — {comment}\n'
                  f'{dn_label}, {n_files} flight lines | T4 threshold: {T4_thresh:.0f} K',
-                 fontsize=14, fontweight='bold')
+                 fontsize=22, fontweight='bold')
 
     # --- Top-left: Fire/false-positive locations ---
     ax = axes[0, 0]
@@ -79,19 +79,23 @@ def plot_single_flight(grid_T4, grid_T11, grid_SWIR, grid_fire, lat_axis, lon_ax
         fire_lons = lon_axis[0] + (lon_axis[-1] - lon_axis[0]) * fire_cols / (len(lon_axis) - 1)
         ax.scatter(fire_lons, fire_lats, s=0.3, c=detection_color, alpha=0.7,
                    label=f'{detection_label} ({fire_count:,} cells)')
-        ax.legend(loc='upper right', markerscale=15, fontsize=9)
-    ax.set_title(f'{detection_label} Locations ({fire_count:,} cells)')
-    ax.set_ylabel('Latitude')
-    ax.set_xlabel('Longitude')
+        ax.legend(loc='upper right', markerscale=15, fontsize=14)
+    ax.set_title(f'{detection_label} Locations ({fire_count:,} cells)', fontsize=18, fontweight='bold')
+    ax.set_ylabel('Latitude', fontsize=16)
+    ax.set_xlabel('Longitude', fontsize=16)
+    ax.tick_params(labelsize=12)
 
     # --- Top-right: T4 brightness temperature ---
     ax = axes[0, 1]
     im_t4 = ax.imshow(grid_T4, extent=extent, aspect='equal',
                        cmap='inferno', vmin=vmin_t4, vmax=vmax_t4)
-    ax.set_title('T4 — 3.9 μm (fire channel)')
-    ax.set_xlabel('Longitude')
-    ax.set_ylabel('Latitude')
-    plt.colorbar(im_t4, ax=ax, fraction=0.046, pad=0.04, label='K')
+    ax.set_title('T4 — 3.9 \u03bcm (fire channel)', fontsize=18, fontweight='bold')
+    ax.set_xlabel('Longitude', fontsize=16)
+    ax.set_ylabel('Latitude', fontsize=16)
+    ax.tick_params(labelsize=12)
+    cb = plt.colorbar(im_t4, ax=ax, fraction=0.046, pad=0.04, label='K')
+    cb.set_label('K', fontsize=14)
+    cb.ax.tick_params(labelsize=12)
 
     # --- Bottom-left: SWIR radiance ---
     ax = axes[1, 0]
@@ -100,10 +104,13 @@ def plot_single_flight(grid_T4, grid_T11, grid_SWIR, grid_fire, lat_axis, lon_ax
                             else (0, 1))
     im_swir = ax.imshow(grid_SWIR, extent=extent, aspect='equal',
                          cmap='viridis', vmin=vmin_swir, vmax=vmax_swir)
-    ax.set_title('SWIR — 2.16 μm (solar reflection)')
-    ax.set_xlabel('Longitude')
-    ax.set_ylabel('Latitude')
-    plt.colorbar(im_swir, ax=ax, fraction=0.046, pad=0.04, label='W/m²/sr/μm')
+    ax.set_title('SWIR — 2.16 \u03bcm (solar reflection)', fontsize=18, fontweight='bold')
+    ax.set_xlabel('Longitude', fontsize=16)
+    ax.set_ylabel('Latitude', fontsize=16)
+    ax.tick_params(labelsize=12)
+    cb = plt.colorbar(im_swir, ax=ax, fraction=0.046, pad=0.04)
+    cb.set_label('W/m\u00b2/sr/\u03bcm', fontsize=14)
+    cb.ax.tick_params(labelsize=12)
 
     # --- Bottom-right: T4 vs ΔT detection space scatter ---
     ax = axes[1, 1]
@@ -148,18 +155,21 @@ def plot_single_flight(grid_T4, grid_T11, grid_SWIR, grid_fire, lat_axis, lon_ax
     ax.axhline(10, color='green', linestyle='--', linewidth=1, alpha=0.6,
                label='ΔT thresh (10 K)')
 
-    ax.set_xlabel('T4 [K]')
-    ax.set_ylabel('ΔT = T4 − T11 [K]')
+    ax.set_xlabel('T4 [K]', fontsize=16)
+    ax.set_ylabel('\u0394T = T4 \u2212 T11 [K]', fontsize=16)
+    ax.tick_params(labelsize=12)
     if is_preburn:
-        ax.set_title(f'Error: {fire_count:,} false positives in detection space')
+        ax.set_title(f'Error: {fire_count:,} false positives in detection space',
+                     fontsize=18, fontweight='bold')
         ax.set_xlim(250, 500)
         ax.set_ylim(-20, 200)
     else:
-        ax.set_title('Detection Space (orange = pre-burn error, red = fire)')
+        ax.set_title('Detection Space (orange = pre-burn error, red = fire)',
+                     fontsize=18, fontweight='bold')
         ax.set_xlim(250, 750)
         ax.set_ylim(-20, 400)
 
-    ax.legend(fontsize=7, loc='upper left')
+    ax.legend(fontsize=12, loc='upper left')
 
     # Error rate annotation
     if not is_preburn and error_rate is not None:
@@ -172,7 +182,7 @@ def plot_single_flight(grid_T4, grid_T11, grid_SWIR, grid_fire, lat_axis, lon_ax
             f'Error rate ≈ {error_rate:.2%}'
         )
         ax.text(0.98, 0.98, error_text, transform=ax.transAxes,
-                fontsize=7, verticalalignment='top', horizontalalignment='right',
+                fontsize=11, verticalalignment='top', horizontalalignment='right',
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.85),
                 family='monospace')
     elif is_preburn:
@@ -182,7 +192,7 @@ def plot_single_flight(grid_T4, grid_T11, grid_SWIR, grid_fire, lat_axis, lon_ax
             f'FP rate: {100.0 * fire_count / max(valid_count, 1):.4f}%'
         )
         ax.text(0.98, 0.98, fp_text, transform=ax.transAxes,
-                fontsize=7, verticalalignment='top', horizontalalignment='right',
+                fontsize=11, verticalalignment='top', horizontalalignment='right',
                 bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.85),
                 family='monospace')
 

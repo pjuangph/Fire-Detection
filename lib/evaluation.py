@@ -62,12 +62,20 @@ def evaluate(
     else:
         # PyTorch (FireMLP)
         model.eval()
+        device = next(model.parameters()).device
         with torch.no_grad():
-            logits = model(torch.tensor(X, dtype=torch.float32))
-            probs = torch.sigmoid(logits).numpy()
+            logits = model(torch.tensor(X, dtype=torch.float32, device=device))
+            probs = torch.sigmoid(logits).cpu().numpy()
 
     preds = (probs >= threshold).astype(np.float32)
+    return compute_binary_metrics(preds, y), probs
 
+
+def compute_binary_metrics(
+    preds: NDArrayFloat,
+    y: NDArrayFloat,
+) -> Metrics:
+    """Compute TP/FP/FN/TN and precision/recall from binary predictions."""
     TP = int(np.sum((preds == 1) & (y == 1)))
     FP = int(np.sum((preds == 1) & (y == 0)))
     FN = int(np.sum((preds == 0) & (y == 1)))
@@ -79,7 +87,7 @@ def evaluate(
     return {
         'TP': TP, 'FP': FP, 'FN': FN, 'TN': TN,
         'precision': precision, 'recall': recall,
-    }, probs
+    }
 
 
 def print_metrics(metrics: Metrics, label: str = '') -> None:

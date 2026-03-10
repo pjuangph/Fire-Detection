@@ -8,7 +8,10 @@
 #
 # Grid size: BCE 3x3x3=27 + Error-rate 3x3=9 = 36 total runs.
 
-epochs: 100
+data_dir: ignite_fire_data
+T_ignition: 300               # dry wood ignition temp [°C] for thermal normalization
+
+epochs: 120
 batch_size: 4096
 save_every: 25              # save checkpoint every N epochs for crash recovery
 metric: error_rate          # minimize (FN+FP)/P on test set
@@ -17,7 +20,6 @@ search_space:
   loss: [bce, error-rate]
 
   layers:
-    - [64, 32]
     - [64, 64, 64, 32]
     - [128, 64, 32]
     - [128, 128, 128, 64]

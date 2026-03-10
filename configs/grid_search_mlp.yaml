@@ -4,9 +4,19 @@
 #   python train_mlp.py --config configs/grid_search_mlp.yaml
 #
 # The search iterates over all combinations of the parameters below.
-# For error-rate loss, importance_weights are ignored (uniform weights used).
+# For non-BCE losses, importance_weights are ignored (uniform weights used).
+# New losses (tversky, focal-error-rate, combined) use restricted layer/LR
+# grids via loss_overrides to keep total run count manageable.
 #
-# Grid size: BCE 4x3x3=36 + Error-rate 4x3=12 = 48 total runs.
+# Grid size (x2 normalization = hybrid + standard):
+#   BCE:              4 layers x 3 LR x 3 weights x 2 dropout x 2 norm = 144
+#   Error-rate:       4 layers x 3 LR x 2 dropout x 2 norm             =  48
+#   Tversky:          2 layers x 2 LR x 2 params x 2 dropout x 2 norm  =  32
+#   Focal-error-rate: 2 layers x 2 LR x 2 params x 2 dropout x 2 norm  =  32
+#   Combined:         2 layers x 2 LR x 2 params x 2 dropout x 2 norm  =  32
+#   Total: 288 runs
+
+data_dir: ignite_fire_data
 
 epochs: 100
 batch_size: 4096
@@ -14,10 +24,14 @@ save_every: 25              # save checkpoint every N epochs for crash recovery
 metric: error_rate          # minimize (FN+FP)/P on test set
 
 search_space:
-  loss: [bce, error-rate]
+  loss: [bce, error-rate, tversky, focal-error-rate, combined]
+
+  # Normalization strategy for the 12 input features.
+  #   hybrid:   thermal features / T_ignition (573 K), non-thermal via StandardScaler
+  #   standard: all 12 features via StandardScaler (fit on GT flight)
+  normalization: [hybrid, standard]
 
   layers:
-    - [64, 32]
     - [64, 64, 64, 32]
     - [128, 64, 32]
     - [128, 128, 128, 64]
@@ -25,8 +39,38 @@ search_space:
   learning_rate: [0.01, 0.001, 0.0001]
 
   # Importance weights for compute_pixel_weights (BCE only).
-  # Error-rate loss uses uniform weights regardless of this setting.
+  # All other losses use default weights regardless of this setting.
   importance_weights:
     - {gt: 10, fire: 5, other: 1}    # current default
     - {gt: 15, fire: 3, other: 1}    # heavier FP penalty
     - {gt: 5, fire: 10, other: 1}    # heavier FN penalty
+
+  # Regularisation — searched across all losses
+  dropout: [0.0, 0.1]
+  grad_clip_norm: [1.0]
+
+  # --- Loss-specific hyperparameters ---
+
+  tversky_params:
+    - {alpha: 0.3, beta: 0.7}       # recall-biased (prioritise finding fire)
+    - {alpha: 0.5, beta: 0.5}       # balanced (Dice loss)
+
+  focal_params:
+    - {gamma: 1.0}                   # mild focus on hard examples
+    - {gamma: 2.0}                   # strong focus on hard examples
+
+  combined_params:
+    - {lam: 0.3}                     # 30% BCE, 70% error-rate
+    - {lam: 0.5}                     # equal weighting
+
+  # Restrict new losses to top architectures/LRs to keep run count sane.
+  loss_overrides:
+    tversky:
+      layers: [[128, 64, 32], [128, 128, 128, 32]]
+      learning_rate: [0.01, 0.001]
+    focal-error-rate:
+      layers: [[128, 64, 32], [128, 128, 128, 32]]
+      learning_rate: [0.01, 0.001]
+    combined:
+      layers: [[128, 64, 32], [128, 128, 128, 32]]
+      learning_rate: [0.01, 0.001]

@@ -16,6 +16,15 @@ CH_NIR  = 8    # Ch 9:  nominal wavelength 0.866 μm, VNIR NIR band (for NDVI)
 # Native MASTER pixel spacing is ~8 m; this is ~3× downsampled for speed.
 GRID_RES = 0.00025  # [degrees]
 
+# Ignition temperature of dry wood (piloted ignition ≈ 300 °C = 573.15 K).
+# YAML configs store this in °C; code converts to K via + 273.15.
+# Used to normalize thermal features: T_norm = T / T_IGNITION.
+T_IGNITION_DRY_WOOD = 573.15  # [K]
+
+# Feature indices for thermal vs non-thermal normalization.
+THERMAL_FEATURE_INDICES = [0, 1, 2, 3]      # T4_max, T4_mean, T11_mean, dT_max
+NON_THERMAL_FEATURE_INDICES = [4, 5, 6, 7, 8, 9, 10, 11]  # SWIR, Red, NIR, NDVI, obs
+
 # Vegetation loss threshold for fire confirmation [NDVI units].
 # NDVI drop >= 0.15 from baseline indicates burned vegetation.
 # Healthy grassland NDVI: 0.3–0.6; burned: -0.1 to 0.1.

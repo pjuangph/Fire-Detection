@@ -10,11 +10,16 @@ from typing import Any
 
 import numpy as np
 import numpy.typing as npt
+import torch
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 
 from lib import group_files_by_flight, compute_grid_extent, build_pixel_table
 from lib.features import build_location_features
 from lib.losses import compute_pixel_weights
+from lib.constants import (
+    T_IGNITION_DRY_WOOD, THERMAL_FEATURE_INDICES, NON_THERMAL_FEATURE_INDICES,
+)
 
 # Type aliases
 NDArrayFloat = npt.NDArray[np.floating[Any]]
@@ -65,7 +70,8 @@ def extract_train_test(
     importance_gt: float = 10.0,
     importance_fire: float = 5.0,
     importance_other: float = 1.0,
-) -> tuple[NDArrayFloat, NDArrayFloat, NDArrayFloat, NDArrayFloat, NDArrayFloat, NDArrayFloat]:
+) -> tuple[NDArrayFloat, NDArrayFloat, NDArrayFloat, NDArrayFloat,
+           NDArrayFloat, NDArrayFloat, NDArrayFloat, NDArrayFloat]:
     """Split ground truth flight between train/test, then add burn flights.
 
     Flight 03 (pre-burn, no fire) is split 80/20 between train/test.
@@ -121,7 +127,8 @@ def extract_train_test(
         importance_fire=importance_fire,
         importance_other=importance_other)
 
-    return (X_train, y_train, w_train, X_test, y_test, w_test)
+    return (X_train, y_train, w_train, flight_src_train,
+            X_test, y_test, w_test, flight_src_test)
 
 
 def oversample_minority(
@@ -215,3 +222,80 @@ def safe_split(*args: Any, stratify: Any = None, **kwargs: Any) -> Any:
 def make_splitter(test_size: float = 0.2, seed: int = 0) -> Any:
     """Return a partial-applied safe_split for use with TabPFN data utils."""
     return partial(safe_split, test_size=test_size, random_state=seed)
+
+
+# ── TabPFN Shared Helpers ────────────────────────────────────
+
+
+def prepare_tabpfn_dataset(
+    flight_features: FlightFeatures,
+    gt_flight: str = '24-801-03',
+    T_ignition: float = T_IGNITION_DRY_WOOD,
+) -> tuple[NDArrayFloat, NDArrayFloat, StandardScaler]:
+    """Build merged dataset for TabPFN training with GT flight forced to no-fire.
+
+    Uses hybrid normalization: thermal features (indices 0-3) are divided by
+    T_ignition; non-thermal features (indices 4-11) use StandardScaler fit
+    on the ground-truth flight.
+
+    Returns:
+        Tuple of (X_norm, y, scaler) where X_norm is hybrid-normalized
+        and NaN-cleaned.
+    """
+    therm_idx = THERMAL_FEATURE_INDICES
+    non_therm_idx = NON_THERMAL_FEATURE_INDICES
+
+    X_parts, y_parts = [], []
+    for fnum, ff in flight_features.items():
+        X_parts.append(ff['X'])
+        if fnum == gt_flight:
+            y_parts.append(np.zeros(len(ff['X']), dtype=np.float32))
+        else:
+            y_parts.append(ff['y'])
+    X_all = np.concatenate(X_parts)
+    y_all = np.concatenate(y_parts)
+
+    # Fit scaler on ground-truth flight non-thermal features only
+    gt_X = flight_features[gt_flight]['X']
+    gt_X_clean = np.where(np.isfinite(gt_X), gt_X, 0.0).astype(np.float32)
+    scaler = StandardScaler()
+    scaler.fit(gt_X_clean[:, non_therm_idx])
+
+    X_clean = np.where(np.isfinite(X_all), X_all, 0.0).astype(np.float32)
+    X_norm = np.empty_like(X_clean)
+    X_norm[:, therm_idx] = X_clean[:, therm_idx] / T_ignition
+    X_norm[:, non_therm_idx] = scaler.transform(
+        X_clean[:, non_therm_idx]).astype(np.float32)
+
+    y = y_all.astype(np.float32)
+    return X_norm, y, scaler
+
+
+def find_resume_checkpoint(
+    ckpt_path: str, target_epochs: int,
+) -> str | None:
+    """Return *ckpt_path* if it holds a partially-trained checkpoint, else None."""
+    if not os.path.isfile(ckpt_path):
+        return None
+    try:
+        ckpt = torch.load(ckpt_path, weights_only=False, map_location='cpu')
+        done = ckpt.get('epoch', 0)
+    except Exception:
+        return None
+    if 0 < done < target_epochs:
+        return ckpt_path
+    return None
+
+
+def compute_error_rate(metrics: dict[str, Any]) -> float:
+    """Compute error rate = (FN + FP) / P from evaluation metrics."""
+    P = metrics['TP'] + metrics['FN']
+    return (metrics['FN'] + metrics['FP']) / max(P, 1)
+
+
+def coerce_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    """Convert numpy scalars to plain Python floats for JSON serialization."""
+    return {
+        k: (float(v) if isinstance(v, (int, float, np.integer, np.floating)) else v)
+        for k, v in metrics.items()
+    }

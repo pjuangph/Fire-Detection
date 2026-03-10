@@ -119,29 +119,38 @@ and SWIR is low at night. The MLP learns these discriminating patterns.
 Model Architecture
 ------------------
 
+The architecture is **variable via YAML grid search**
+(``configs/grid_search.yaml``). The network is a fully connected MLP
+with configurable hidden layers:
+
 ::
 
     Input (12 features)
       |
-      Linear(12, 64) + ReLU
+      [Hidden layers: variable width and depth]
       |
-      Linear(64, 32) + ReLU
-      |
-      Linear(32, 1)
+      Linear(last_hidden, 1)
       |
       sigmoid -> P(fire) in [0, 1]
 
-- **Parameters:** 2,721
-- **Loss:** Pixel-wise weighted BCEWithLogitsLoss (see below)
-- **Optimizer:** Adam, lr = 0.001
+**Best architecture** (from grid search run 37): ``12 -> 64 -> 32 -> 1``
+
+- **Parameters:** ~2,721 (varies by architecture)
+- **Loss:** Weighted BCE or SoftErrorRateLoss (see below)
+- **Optimizer:** Adam (learning rate selected via grid search)
 - **Epochs:** 300
 - **Batch size:** 4,096
 - **Normalization:** Global z-score from all flights (mean/std saved
   with model checkpoint)
 
 
-Pixel-Wise Weighted BCE Loss
-----------------------------
+Loss Functions
+--------------
+
+Two loss functions are compared via grid search:
+
+1. Weighted BCE Loss
+^^^^^^^^^^^^^^^^^^^^
 
 Standard BCE loss treats all pixels equally. For fire detection, some errors
 are worse than others:
@@ -192,11 +201,88 @@ Then normalized so :math:`\text{mean}(w) = 1` to keep gradient scale stable.
    proportionally despite being outnumbered
 3. **Normalization** (mean=1): Keeps gradient magnitudes stable during training
 
-**Expected outcome:**
+2. SoftErrorRateLoss
+^^^^^^^^^^^^^^^^^^^^
 
-- FP on flight 03 approaches 0 (heavily penalized)
-- Recall on burn flights maintained (fire pixels have high weight)
-- Model learns: "If thermal signature is ambiguous, don't call it fire"
+Directly minimizes the error rate instead of per-pixel cross-entropy:
+
+.. math::
+
+   \mathcal{L} = \frac{\text{soft\_FN} + \text{soft\_FP}}{P}
+
+where :math:`P` is the total number of actual fire pixels (positives).
+Soft counts are computed with differentiable approximations:
+
+- :math:`\text{soft\_FN} = \sum_{i: y_i=1} (1 - p_i)` -- predicted
+  probability mass missed on true fire pixels
+- :math:`\text{soft\_FP} = \sum_{i: y_i=0} p_i` -- predicted probability
+  mass assigned to non-fire pixels
+
+**Key properties:**
+
+- True negatives (TN) do not appear in the loss -- correctly ignoring
+  the dominant class.
+- Uses **uniform weights** (all 1.0) with minority class oversampling
+  instead of per-pixel importance weighting.
+- Directly optimizes the evaluation metric (error rate).
+
+Evaluation Metric
+^^^^^^^^^^^^^^^^^
+
+All models are evaluated using error rate:
+
+.. math::
+
+   \text{error\_rate} = \frac{FN + FP}{P}
+
+where :math:`P` is the number of actual fire pixels. This metric counts
+absolute errors (false negatives + false positives) relative to the number
+of real fire detections. Lower is better.
+
+
+Grid Search
+-----------
+
+The grid search explores 49 configurations across the hyperparameter space:
+
+- **2 loss functions:** Weighted BCE, SoftErrorRateLoss
+- **4 architectures:** e.g., ``[64, 32]``, ``[64, 64, 32]``,
+  ``[64, 64, 64, 32]``, ``[128, 64, 32]``
+- **3 learning rates:** e.g., 0.001, 0.0005, 0.0001
+- **Multiple importance weight configurations** (for Weighted BCE only)
+
+Configuration is defined in ``configs/grid_search.yaml``. Run with::
+
+   python tune_fire_prediction.py --config configs/grid_search.yaml
+
+Results are saved to ``results/grid_search_results.json``.
+
+
+Best Model Results
+^^^^^^^^^^^^^^^^^^
+
+**Run 37** achieved the best error rate:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 75
+
+   * - Parameter
+     - Value
+   * - Loss function
+     - SoftErrorRateLoss
+   * - Architecture
+     - 12 -> 64 -> 32 -> 1
+   * - Error rate
+     - **0.031**
+   * - True Positives (TP)
+     - 9,009
+   * - False Positives (FP)
+     - 221
+   * - False Negatives (FN)
+     - 59
+
+The best model is automatically saved to ``checkpoint/fire_detector_best.pt``.
 
 
 Training Data

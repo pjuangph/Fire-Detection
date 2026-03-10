@@ -41,8 +41,8 @@ print(f"\nRadiance shape: {radiance.shape}  (scanlines, channels, pixels)")
 print(f"Wavelengths (μm): {wavelengths}")
 
 # --- Plot ---
-fig, axes = plt.subplots(2, 3, figsize=(16, 10))
-fig.suptitle(filepath.split('/')[-1], fontsize=13)
+fig, axes = plt.subplots(2, 3, figsize=(20, 12))
+fig.suptitle(filepath.split('/')[-1], fontsize=22, fontweight='bold')
 
 # Pick channels across the spectrum: VNIR, SWIR, TIR
 channels = [3, 15, 25, 35, 44, 49]
@@ -52,29 +52,37 @@ for ax, ch, label in zip(axes.flat, channels, labels):
     img = radiance[:, ch, :]
     vmin, vmax = np.nanpercentile(img, [2, 98])
     im = ax.imshow(img, aspect='auto', cmap='inferno', vmin=vmin, vmax=vmax)
-    ax.set_title(f"Ch {ch+1} ({wavelengths[ch]:.2f} μm) - {label}")
-    ax.set_xlabel("Pixel")
-    ax.set_ylabel("Scanline")
-    plt.colorbar(im, ax=ax, label="W/m²/sr/μm", fraction=0.046)
+    ax.set_title(f"Ch {ch+1} ({wavelengths[ch]:.2f} \u03bcm) - {label}",
+                 fontsize=16, fontweight='bold')
+    ax.set_xlabel("Pixel", fontsize=14)
+    ax.set_ylabel("Scanline", fontsize=14)
+    ax.tick_params(labelsize=12)
+    cb = plt.colorbar(im, ax=ax, fraction=0.046)
+    cb.set_label("W/m\u00b2/sr/\u03bcm", fontsize=12)
+    cb.ax.tick_params(labelsize=10)
 
 plt.tight_layout()
 import os
 os.makedirs("plots", exist_ok=True)
-plt.savefig("plots/radiance_overview.png", dpi=150)
+plt.savefig("plots/radiance_overview.png", dpi=200, bbox_inches='tight')
 plt.show()
 
 # Geographic extent plot
-fig2, ax2 = plt.subplots(figsize=(8, 8))
+fig2, ax2 = plt.subplots(figsize=(10, 10))
 # Use a thermal channel for fire detection context
-thermal_ch = 44  # ~11 μm TIR
+thermal_ch = 44  # ~11 \u03bcm TIR
 img = radiance[:, thermal_ch, :]
 vmin, vmax = np.nanpercentile(img, [2, 98])
 sc = ax2.pcolormesh(lon, lat, img, cmap='inferno', vmin=vmin, vmax=vmax, shading='auto')
-ax2.set_xlabel("Longitude")
-ax2.set_ylabel("Latitude")
-ax2.set_title(f"Ch {thermal_ch+1} ({wavelengths[thermal_ch]:.2f} μm) - Georeferenced")
+ax2.set_xlabel("Longitude", fontsize=18)
+ax2.set_ylabel("Latitude", fontsize=18)
+ax2.set_title(f"Ch {thermal_ch+1} ({wavelengths[thermal_ch]:.2f} \u03bcm) - Georeferenced",
+              fontsize=20, fontweight='bold')
 ax2.set_aspect('equal')
-plt.colorbar(sc, ax=ax2, label="W/m²/sr/μm")
+ax2.tick_params(labelsize=14)
+cb = plt.colorbar(sc, ax=ax2)
+cb.set_label("W/m\u00b2/sr/\u03bcm", fontsize=16)
+cb.ax.tick_params(labelsize=14)
 plt.tight_layout()
-plt.savefig("plots/georeferenced_thermal.png", dpi=150)
+plt.savefig("plots/georeferenced_thermal.png", dpi=200, bbox_inches='tight')
 plt.show()

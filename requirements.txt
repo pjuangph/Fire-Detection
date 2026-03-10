@@ -7,3 +7,8 @@ pandas
 scipy
 earthaccess
 pyyaml
+tqdm
+imageio
+Pillow
+python-pptx
+tabpfn

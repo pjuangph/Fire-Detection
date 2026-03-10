@@ -79,40 +79,241 @@ Flights in the Dataset
      - **Yes** -- USFS Blowdown Prescribed Burn
 
 
-What Each Script Produces
--------------------------
+Project Structure
+-----------------
+
+Scripts
+^^^^^^^
+
+Scripts are organized by workflow stage. Run them from the project root.
+
+**Data Acquisition & Inspection**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 40 30
+
+   * - Script
+     - Purpose
+     - Output
+   * - ``download_data.py``
+     - Download MASTER L1B data from NASA Earthdata
+     - ``ignite_fire_data/*.hdf``
+   * - ``plotdata.py``
+     - Inspect HDF structure, plot sample channels across spectrum
+     - ``plots/radiance_overview.png``
+
+**Fire Detection & Mosaics**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 40 30
+
+   * - Script
+     - Purpose
+     - Output
+   * - ``detect_fire.py``
+     - Single-file contextual fire detection (pre-burn vs burn)
+     - ``plots/fire_detection_*.png``
+   * - ``mosaic_flight.py``
+     - Assemble flight lines into georeferenced mosaic with fire overlay
+     - ``plots/mosaic_flight_*.png``
+
+**Analysis & Visualization**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 40 30
+
+   * - Script
+     - Purpose
+     - Output
+   * - ``plot_burn_locations.py``
+     - 2x2 per-flight analysis: fire map, T4, SWIR, scatter
+     - ``plots/burn_locations_*.png``
+   * - ``plot_vegetation.py``
+     - 2x2 NDVI vegetation maps with fire overlay (daytime only)
+     - ``plots/vegetation_*.png``
+   * - ``plot_grid_resolution.py``
+     - Native (~8 m) vs gridded (28 m) resolution comparison
+     - ``plots/grid_resolution_*.png``
+
+**Model Training**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 40 30
+
+   * - Script
+     - Purpose
+     - Output
+   * - ``train_mlp.py``
+     - MLP grid search (``--config configs/grid_search_mlp.yaml``)
+     - ``checkpoint/fire_detector_mlp_best.pt``
+   * - ``train_tabpfn_classification.py``
+     - TabPFN classification grid search
+     - ``checkpoint/fire_detector_tabpfn_best.pt``
+   * - ``train_tabpfn_regression.py``
+     - TabPFN regression grid search
+     - ``checkpoint/fire_detector_tabpfn_regression_best.pt``
+   * - ``tune_fire_prediction-MLP.py``
+     - Legacy MLP grid search (superseded by ``train_mlp.py``)
+     - ``checkpoint/fire_detector_best.pt``
+
+**Real-Time Simulation**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 40 30
+
+   * - Script
+     - Purpose
+     - Output
+   * - ``realtime_fire.py``
+     - Sweep-by-sweep simulation; threshold (default) or ML via ``--config``
+     - ``plots/realtime/simple-*.png`` or ``ml-*.png``
+   * - ``realtime_mlp.py``
+     - MLP-specific realtime wrapper (``--config configs/best_model.yaml``)
+     - ``plots/realtime/ml-*.png``
+   * - ``realtime_tabpfn_classification.py``
+     - TabPFN classifier realtime simulation
+     - ``plots/realtime/tabpfn_classification-*.png``
+   * - ``realtime_tabpfn_regression.py``
+     - TabPFN regressor realtime simulation
+     - ``plots/realtime/tabpfn_regression-*.png``
+
+**Comparison & Reporting**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 40 30
+
+   * - Script
+     - Purpose
+     - Output
+   * - ``compare_fire_detectors.py``
+     - Per-flight ML vs threshold comparison table
+     - stdout
+   * - ``make_gifs.py``
+     - Animate realtime frames; pairwise detector comparison GIFs
+     - ``plots/gifs/*.gif``
+   * - ``create_presentation.py``
+     - Generate PowerPoint presentation from all results
+     - ``Fire_Detection_Presentation.pptx``
+   * - ``plot_presentation_diagrams.py``
+     - Architecture and flow diagrams for presentation
+     - ``plots/diagram_*.png``
+
+**Shell Orchestration Scripts**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Script
+     - Purpose
+   * - ``generate_plots.sh``
+     - Run all visualization, realtime simulations, and GIF creation
+   * - ``train-all-models.sh``
+     - Train MLP + TabPFN classification + TabPFN regression sequentially
+   * - ``reset_project.sh``
+     - Clean up generated artifacts (``--plots``, ``--model``, ``--stale``)
+
+
+Library Modules (``lib/``)
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+All shared functions live in ``lib/`` and are re-exported through
+``lib/__init__.py`` for convenient imports (``from lib import ...``).
 
 .. list-table::
    :header-rows: 1
    :widths: 25 40 35
 
-   * - Script
+   * - Module
      - Purpose
-     - Output Files
-   * - ``download_data.py``
-     - Download MASTER L1B data from NASA Earthdata
-     - ``ignite_fire_data/*.hdf``
-   * - ``mosaic_flight.py``
-     - Assemble flight lines into georeferenced mosaic with fire overlay
-     - ``plots/mosaic_flight_*.png``
-   * - ``realtime_fire.py``
-     - Simulate real-time sweep-by-sweep fire detection
-     - ``plots/realtime_*/frame_*.png``
-   * - ``plot_burn_locations.py``
-     - Per-flight 2x2 analysis (fire map, T4, SWIR, scatter)
-     - ``plots/burn_locations_*.png``
-   * - ``plot_vegetation.py``
-     - 2x2 NDVI vegetation maps with fire overlay (daytime only)
-     - ``plots/vegetation_*.png``
-   * - ``detect_fire.py``
-     - Single-file fire detection comparing pre-burn vs burn
-     - ``plots/fire_detection_*.png``, ``plots/fire_map_burn.png``
-   * - ``tune_fire_prediction.py``
-     - YAML grid search for MLP fire detector
-     - ``results/grid_search_results.json``, ``checkpoint/fire_detector_best.pt``
-   * - ``compare_fire_detectors.py``
-     - Per-flight ML vs threshold comparison
-     - (stdout table)
+     - Key Functions / Classes
+   * - ``constants.py``
+     - Physical constants, MASTER channel indices, grid parameters
+     - ``CH_T4``, ``CH_T11``, ``CH_SWIR``, ``CH_RED``, ``CH_NIR``, ``GRID_RES``
+   * - ``io.py``
+     - HDF file I/O, radiance to brightness temperature conversion
+     - ``radiance_to_bt()``, ``process_file()``, ``group_files_by_flight()``
+   * - ``fire.py``
+     - Threshold + contextual fire detection, zone labeling
+     - ``detect_fire_simple()``, ``detect_fire()``, ``detect_fire_zones()``
+   * - ``vegetation.py``
+     - NDVI computation, sunlight detection, vegetation loss
+     - ``compute_ndvi()``, ``has_sunlight()``, ``detect_vegetation_loss()``
+   * - ``mosaic.py``
+     - Incremental gridding, dynamic grid expansion
+     - ``build_mosaic()``, ``process_sweep()``, ``get_fire_mask()``
+   * - ``features.py``
+     - 12 aggregate features per grid cell for ML models
+     - ``build_location_features()``
+   * - ``firemlp.py``
+     - Variable-depth MLP neural network architecture
+     - ``FireMLP(nn.Module)``
+   * - ``inference.py``
+     - Model loading (MLP, TabPFN) and prediction
+     - ``load_fire_model()``, ``predict()``
+   * - ``losses.py``
+     - Loss functions: weighted BCE, SoftErrorRateLoss
+     - ``SoftErrorRateLoss``, ``compute_pixel_weights()``
+   * - ``training.py``
+     - Data pipeline: load, split, oversample, grid search helpers
+     - ``load_all_data()``, ``extract_train_test()``, ``oversample_minority()``
+   * - ``evaluation.py``
+     - TP/FP/FN metrics, device selection (CUDA/MPS/CPU)
+     - ``evaluate()``, ``print_metrics()``, ``get_device()``
+   * - ``plotting.py``
+     - Training diagnostic plots (loss curves, convergence)
+     - ``plot_training_loss()``, ``plot_convergence_curves()``
+   * - ``realtime.py``
+     - Shared rendering and simulation for all realtime scripts
+     - ``render_frame()``, ``simulate_flight()``
+   * - ``stats.py``
+     - Pixel tables, grid cell area computation
+     - ``build_pixel_table()``, ``compute_cell_area_m2()``
+   * - ``context_sampling.py``
+     - TabPFN context sampling to control memory usage
+     - ``EvalBatching``, ``sample_train_context_indices()``
+
+
+Configuration Files (``configs/``)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - File
+     - What It Configures
+   * - ``grid_search_mlp.yaml``
+     - MLP grid search: 4 architectures x 3 LRs x 2 losses
+   * - ``grid_search_tabpfn_classification.yaml``
+     - TabPFN classification: LR, batch size, estimators, weight decay, grad clip
+   * - ``grid_search_tabpfn_regression.yaml``
+     - TabPFN regression: same as above + CRPS/MSE loss weights
+   * - ``best_model.yaml``
+     - Best MLP model config (auto-generated by training)
+   * - ``best_model_mlp.yaml``
+     - Best MLP from ``train_mlp.py`` (auto-generated)
+   * - ``best_model_tabpfn_classification.yaml``
+     - Best TabPFN classifier (auto-generated)
+   * - ``best_model_tabpfn_regression.yaml``
+     - Best TabPFN regressor (auto-generated)
+
+
+Typical Workflow
+^^^^^^^^^^^^^^^^
+
+::
+
+   python download_data.py                     # 1. Fetch MASTER data (~9 GB)
+   bash train-all-models.sh                    # 2. Train MLP + both TabPFN models
+   bash generate_plots.sh                      # 3. Generate all plots + GIFs
+   python create_presentation.py               # 4. Build PowerPoint presentation
 
 
 Reading the Outputs
@@ -121,14 +322,16 @@ Reading the Outputs
 Fire Overlay Colors
 ^^^^^^^^^^^^^^^^^^^
 
-- **Red dots**: Fire detections that passed the absolute temperature
-  threshold (T4 > 325 K daytime, 310 K nighttime).
-- **Orange dots** (in ``realtime_fire.py``): **Vegetation-confirmed
-  fire** -- pixels where thermal fire is independently confirmed by
-  NDVI drop (vegetation loss). Higher confidence than red-only.
-- **Orange dots** (in ``detect_fire.py``): Contextual anomaly
+- **Red dots with black edge**: Fire detections that passed the absolute
+  temperature threshold (T4 > 325 K daytime, 310 K nighttime).
+- **Magenta dots** (#FF00FF, in ``realtime_fire.py``):
+  **Vegetation-confirmed fire** -- pixels where thermal fire is
+  independently confirmed by NDVI drop (vegetation loss). Higher
+  confidence than red-only.
+- **Magenta dots** (#FF00FF, in ``detect_fire.py``): Contextual anomaly
   detections -- pixels that are anomalously warm relative to their
   neighbors but below the absolute threshold.
+- **Black bounding boxes**: Bounding boxes around detected fire zones.
 
 Background Layer
 ^^^^^^^^^^^^^^^^
@@ -147,6 +350,13 @@ levels, not from clock time. This handles cloud cover correctly --
 if clouds block sunlight, those pixels show thermal background even
 during geometric daytime.
 
+Plot Title (Real-Time Simulation)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The real-time simulation plot title now shows the **detector type** being
+used (e.g., "Threshold Detector" or "MLP Detector"). This makes it
+immediately clear which detection method produced the displayed results.
+
 Stats Box (Real-Time Simulation)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -156,7 +366,7 @@ The ``realtime_fire.py`` output includes a stats box showing:
 - **Coverage**: Percentage of grid cells with data so far.
 - **Fire pixels**: Total confirmed fire pixels (after multi-pass filter).
 - **Veg-confirmed**: Fire pixels independently confirmed by vegetation
-  loss (NDVI drop from baseline). These are shown as orange dots.
+  loss (NDVI drop from baseline). These are shown as magenta dots.
 - **Total fire area**: Estimated area in m\ :sup:`2` or hectares.
 - **Fire zones**: Number of spatially connected fire regions.
 - **Zone breakdown**: Top 5 zones by size with individual areas.

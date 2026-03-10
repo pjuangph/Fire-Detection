@@ -18,10 +18,48 @@ class SoftErrorRateLoss(nn.Module):
 
     P_total is precomputed once from the full training set so that
     each mini-batch's FP/FN contributions are normalized consistently.
+
+    Optional gt_fp_penalty adds extra loss for false positives on
+    ground-truth (pre-burn) pixels when gt_mask is provided.
     """
 
-    def __init__(self, P_total: float):
+    def __init__(self, P_total: float, gt_fp_penalty: float = 0.0):
         super().__init__()
+        self.P_total = max(P_total, 1.0)
+        self.gt_fp_penalty = gt_fp_penalty
+
+    def forward(
+        self,
+        logits: torch.Tensor,
+        y: torch.Tensor,
+        w: torch.Tensor,
+        gt_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        p = torch.sigmoid(logits)
+        soft_FP = (w * p * (1 - y)).sum()
+        soft_FN = (w * (1 - p) * y).sum()
+        loss = (soft_FN + soft_FP) / self.P_total
+        if gt_mask is not None and self.gt_fp_penalty > 0:
+            gt_FP = (p * (1 - y) * gt_mask.float()).sum()
+            loss = loss + self.gt_fp_penalty * gt_FP / self.P_total
+        return loss
+
+
+class TverskyLoss(nn.Module):
+    """Tversky loss -- generalised Dice with tunable FP/FN asymmetry.
+
+    alpha < beta penalises false negatives more (recall-biased).
+    alpha=beta=0.5 reduces to standard Dice loss.
+    """
+
+    def __init__(self, alpha: float = 0.3, beta: float = 0.7,
+                 smooth: float = 1.0, gt_fp_penalty: float = 0.0,
+                 P_total: float = 1.0):
+        super().__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.smooth = smooth
+        self.gt_fp_penalty = gt_fp_penalty
         self.P_total = max(P_total, 1.0)
 
     def forward(
@@ -29,11 +67,92 @@ class SoftErrorRateLoss(nn.Module):
         logits: torch.Tensor,
         y: torch.Tensor,
         w: torch.Tensor,
+        gt_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        p = torch.sigmoid(logits)
+        TP_soft = (w * p * y).sum()
+        FP_soft = (w * p * (1 - y)).sum()
+        FN_soft = (w * (1 - p) * y).sum()
+        tversky = (TP_soft + self.smooth) / (
+            TP_soft + self.alpha * FP_soft + self.beta * FN_soft + self.smooth
+        )
+        loss = 1.0 - tversky
+        if gt_mask is not None and self.gt_fp_penalty > 0:
+            gt_FP = (p * (1 - y) * gt_mask.float()).sum()
+            loss = loss + self.gt_fp_penalty * gt_FP / self.P_total
+        return loss
+
+
+class FocalErrorRateLoss(nn.Module):
+    """Error-rate loss with focal modulation on hard examples.
+
+    Each sample's FP/FN contribution is weighted by (1 - p_correct)^gamma.
+    gamma=0 reduces exactly to SoftErrorRateLoss.
+    """
+
+    def __init__(self, P_total: float, gamma: float = 2.0,
+                 gt_fp_penalty: float = 0.0):
+        super().__init__()
+        self.P_total = max(P_total, 1.0)
+        self.gamma = gamma
+        self.gt_fp_penalty = gt_fp_penalty
+
+    def forward(
+        self,
+        logits: torch.Tensor,
+        y: torch.Tensor,
+        w: torch.Tensor,
+        gt_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        p = torch.sigmoid(logits)
+        pt = y * p + (1 - y) * (1 - p)      # correct-class probability
+        modulator = (1 - pt) ** self.gamma   # high for misclassified
+        soft_FP = (modulator * w * p * (1 - y)).sum()
+        soft_FN = (modulator * w * (1 - p) * y).sum()
+        loss = (soft_FN + soft_FP) / self.P_total
+        if gt_mask is not None and self.gt_fp_penalty > 0:
+            gt_FP = (modulator * p * (1 - y) * gt_mask.float()).sum()
+            loss = loss + self.gt_fp_penalty * gt_FP / self.P_total
+        return loss
+
+
+class CombinedLoss(nn.Module):
+    """Weighted combination of BCE and soft error-rate losses.
+
+    loss = lam * weighted_BCE + (1-lam) * SoftErrorRate
+    gt_fp_penalty applies to the error-rate component.
+    """
+
+    def __init__(self, P_total: float, lam: float = 0.5,
+                 gt_fp_penalty: float = 0.0):
+        super().__init__()
+        self.P_total = max(P_total, 1.0)
+        self.lam = lam
+        self.gt_fp_penalty = gt_fp_penalty
+        self.bce = nn.BCEWithLogitsLoss(reduction='none')
+
+    def forward(
+        self,
+        logits: torch.Tensor,
+        y: torch.Tensor,
+        w: torch.Tensor,
+        gt_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        # BCE component (weighted per-sample)
+        bce_component = (self.bce(logits, y) * w).mean()
+
+        # Error-rate component
         p = torch.sigmoid(logits)
         soft_FP = (w * p * (1 - y)).sum()
         soft_FN = (w * (1 - p) * y).sum()
-        return (soft_FN + soft_FP) / self.P_total
+        er_component = (soft_FN + soft_FP) / self.P_total
+
+        loss = self.lam * bce_component + (1 - self.lam) * er_component
+
+        if gt_mask is not None and self.gt_fp_penalty > 0:
+            gt_FP = (p * (1 - y) * gt_mask.float()).sum()
+            loss = loss + self.gt_fp_penalty * gt_FP / self.P_total
+        return loss
 
 
 def compute_pixel_weights(

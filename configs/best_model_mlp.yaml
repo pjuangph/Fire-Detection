@@ -2,22 +2,29 @@ detector: ml
 model_type: firemlp
 checkpoint: checkpoint/fire_detector_mlp_best.pt
 threshold: 0.5
+T_ignition: 300
+normalization: standard
 training:
-  loss: error-rate
+  loss: combined
   layers:
+  - 128
   - 64
   - 32
-  learning_rate: 0.01
+  learning_rate: 0.001
   epochs: 100
+  dropout: 0.1
+  grad_clip_norm: 1.0
+  loss_kwargs:
+    lam: 0.3
   importance_weights:
     gt: 10
     fire: 5
     other: 1
 metrics:
-  error_rate: 0.030877812086457873
-  precision: 0.976056338028169
-  recall: 0.9934936038817821
-  TP: 9009
-  FP: 221
-  FN: 59
-  TN: 519558
+  error_rate: 0.05668284075871195
+  precision: 0.9667175905718027
+  recall: 0.9769519188354654
+  TP: 8859
+  FP: 305
+  FN: 209
+  TN: 519474
