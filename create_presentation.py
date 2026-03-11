@@ -156,18 +156,36 @@ def _load_yaml_metrics(path):
 
 
 def _gif_slide(prs, title, gif_path, subtitle=None):
-    """Add a full-slide GIF animation with title bar."""
+    """Add a full-slide GIF animation with title bar, fitted to slide."""
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_slide_bg(slide, WHITE)
     _add_title_bar(slide, title)
     if subtitle:
         _add_subtitle(slide, subtitle)
-    added = _safe_add_image(slide, gif_path,
-                            Inches(0.5), Inches(1.5), width=Inches(12.3))
-    if not added:
+
+    if not os.path.isfile(gif_path):
         _add_textbox(slide, Inches(1), Inches(3.5), Inches(11), Inches(1),
                      f'[Animation not found: {gif_path}]',
                      font_size=18, color=MED_GRAY, alignment=PP_ALIGN.CENTER)
+        return slide
+
+    # Fit image within available space (below title bar)
+    avail_w = Inches(12.3)
+    avail_h = Inches(5.8)   # 7.5 - 1.5 top - 0.2 bottom margin
+    top = Inches(1.5)
+
+    with Image.open(gif_path) as img:
+        img_w, img_h = img.size
+    aspect = img_w / img_h
+
+    fit_w = avail_w
+    fit_h = int(fit_w / aspect)
+    if fit_h > avail_h:
+        fit_h = avail_h
+        fit_w = int(fit_h * aspect)
+
+    left = (Inches(13.333) - fit_w) // 2
+    slide.shapes.add_picture(gif_path, left, top, fit_w, fit_h)
     return slide
 
 
@@ -501,38 +519,23 @@ def create_presentation():
     ], font_size=15, color=DARK_TEXT, spacing=Pt(6))
 
     # ══════════════════════════════════════════════════════════════════
-    # 12-15 — Per-Flight Model Comparison (spatial overlay plots)
+    # 12-15 — Per-Flight Model Comparison (animated GIFs)
     # ══════════════════════════════════════════════════════════════════
     _flight_compare_info = [
         ('2480103', 'Pre-Burn (Flight 03) \u2014 Daytime, No Fire',
-         'All detections are false positives  |  Red = Conservative, Purple = Best Overall, Blue = Both'),
+         'All detections are false positives  |  Sweep-by-sweep buildup'),
         ('2480104', 'Active Fire (Flight 04) \u2014 Night',
-         'First fire flight  |  Red = Conservative only, Purple = Best Overall only, Blue = Both'),
+         'First fire flight  |  Sweep-by-sweep buildup'),
         ('2480105', 'Overnight (Flight 05) \u2014 Night',
-         'Second night flight  |  Red = Conservative only, Purple = Best Overall only, Blue = Both'),
+         'Second night flight  |  Sweep-by-sweep buildup'),
         ('2480106', 'Daytime Smoldering (Flight 06)',
-         'Hardest detection scenario  |  Red = Conservative only, Purple = Best Overall only, Blue = Both'),
+         'Hardest detection scenario  |  Sweep-by-sweep buildup'),
     ]
     for fnum_clean, title, subtitle_text in _flight_compare_info:
-        slide = prs.slides.add_slide(prs.slide_layouts[6])
-        _set_slide_bg(slide, WHITE)
-        _add_title_bar(slide, f'Model Comparison \u2014 {title}')
-        _add_subtitle(slide, subtitle_text)
-        # Fit image within remaining space (below subtitle, above bottom)
-        img_path = f'plots/model_compare_{fnum_clean}.png'
-        if os.path.isfile(img_path):
-            with Image.open(img_path) as img:
-                img_w, img_h = img.size
-            aspect = img_w / img_h
-            avail_h = Inches(5.5)   # 7.5 - 1.8 top - 0.2 bottom
-            avail_w = Inches(12.3)  # 13.333 - margins
-            fit_h = avail_h
-            fit_w = int(fit_h * aspect)
-            if fit_w > avail_w:
-                fit_w = avail_w
-                fit_h = int(fit_w / aspect)
-            left = (Inches(13.333) - fit_w) // 2
-            slide.shapes.add_picture(img_path, left, Inches(1.8), fit_w, fit_h)
+        _gif_slide(prs,
+                   f'Model Comparison \u2014 {title}',
+                   f'plots/gifs/model_compare_{fnum_clean}.gif',
+                   subtitle_text)
 
     # ══════════════════════════════════════════════════════════════════
     # 16 — Model Comparison Summary

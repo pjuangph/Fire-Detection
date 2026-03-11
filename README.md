@@ -856,6 +856,8 @@ All plots are saved to the `plots/` directory.
 
 ## References
 
+- Giglio, L., Descloitres, J., Justice, C. O., & Kaufman, Y. J. (2003). An enhanced contextual fire detection algorithm for MODIS. *Remote Sensing of Environment*, 87(2–3), 273–282.
 - Giglio, L., Schroeder, W., & Justice, C. O. (2016). The collection 6 MODIS active fire detection algorithm and fire products. *Remote Sensing of Environment*, 178, 31-41.
+- Schroeder, W., Oliva, P., Giglio, L., & Csiszar, I. A. (2014). The New VIIRS 375 m active fire detection data product: Algorithm description and initial assessment. *Remote Sensing of Environment*, 143, 85–96.
 - [MASTER Instrument Overview](https://asapdata.arc.nasa.gov/sensors/master/)
 - [MODIS Active Fire Product](https://modis.gsfc.nasa.gov/data/dataprod/mod14.php)
