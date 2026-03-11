@@ -26,8 +26,8 @@ def build_location_features(
     to normalize each pixel's temporal context for fire detection.
 
     Feature selection based on MODIS fire detection literature:
-    - Giglio et al. (2003) "An Enhanced Contextual Fire Detection Algorithm"
-    - Schroeder et al. (2014) "The New VIIRS 375m Active Fire Detection"
+    - Giglio et al. (2003) "An enhanced contextual fire detection algorithm for MODIS"
+    - Schroeder et al. (2014) "The New VIIRS 375 m active fire detection data product: Algorithm description and initial assessment"
 
     The 12 aggregate features:
         1. T4_max: Peak 3.9um brightness temperature (fire spike)
